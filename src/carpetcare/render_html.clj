@@ -400,31 +400,56 @@
                   (str/join " " (map #(pill "bad" (nm %)) (:basis h)))
                   (str/join "<br>" (map #(esc (:detail %)) (:violations h)))))))))
 
-(defn- attribution-section [db audit]
-  (let [granted (approval-facts audit)]
+(defn- attribution-section
+  "The prose verdict here is DERIVED from the same live lookup that fills
+  the table, never hardcoded. An earlier revision spelled out in prose
+  which registers drop `:payload`; that sentence would have kept
+  asserting a defect after the defect was fixed, because only the table
+  below was self-correcting. Both are measured now."
+  [db audit]
+  (let [rows      (mapv (fn [{:keys [op subject by]}]
+                          {:op op :subject subject :by by
+                           :in-store (approver-in-commit-record
+                                      db {:op op :subject subject})})
+                        (approval-facts audit))
+        persisted (into (sorted-set) (map (comp nm :op)) (filter :in-store rows))
+        dropped   (into (sorted-set) (map (comp nm :op)) (remove :in-store rows))
+        join-ops  (fn [ops] (str/join ", " (map code ops)))]
     (section
      "Approval attribution — measured, not assumed"
      (str "Every high-stakes act here is human-approved, so <em>who approved it</em> is "
           "part of the evidence a dispute turns on. This section walks each register the "
           "commit actually wrote to and reports whether the approver survived. "
-          "<strong>Measured on this store</strong>: "
-          "<code>:careplan/set</code> and <code>:fibre-screening/set</code> persist the "
-          "proposal <code>:payload</code> (so the approver survives), while "
-          "<code>:ticket/mark-cleaned</code> and <code>:ticket/mark-returned</code> are "
-          "keyed off <code>path</code> only and drop it. Separately, the "
-          "<code>:approval-granted</code> fact is written to the run's audit channel but "
-          "never appended to the store ledger, so for the two actuations the approver is "
-          "recoverable <em>only</em> from the audit trail. The lookup below is derived at "
-          "render time — if the store is fixed, this page corrects itself.")
+          "<strong>Measured on this run</strong>, not asserted: "
+          (cond
+            (empty? rows)
+            "this run produced no approvals to attribute."
+
+            (empty? dropped)
+            (str "every approved op (" (join-ops persisted) ") retained its approver "
+                 "in the committed record.")
+
+            (empty? persisted)
+            (str "no approved op (" (join-ops dropped) ") retained its approver in the "
+                 "committed record — it survives only in the run's audit channel, which "
+                 "is never appended to the store ledger.")
+
+            :else
+            (str (join-ops persisted) (if (= 1 (count persisted)) " retains" " retain")
+                 " the approver in the committed record, while "
+                 (join-ops dropped) (if (= 1 (count dropped)) " does" " do")
+                 " not — for those the approver survives only in the run's audit "
+                 "channel, which is never appended to the store ledger."))
+          " The lookup below is derived at render time, so if the store is fixed this "
+          "page corrects itself on the next build.")
      (table ["Op" "Ticket" "Approver (audit trail)" "Approver in commit record"]
-            (for [{:keys [op subject by]} granted]
-              (let [in-store (approver-in-commit-record db {:op op :subject subject})]
-                (tr (code op) (code subject)
-                    (esc by)
-                    (if in-store
-                      (str (pill "ok" "persisted") " " (esc in-store))
-                      (str (pill "warn" "not persisted")
-                           " <span class=\"muted-text\">(audit only — not in commit record)</span>")))))))))
+            (for [{:keys [op subject by in-store]} rows]
+              (tr (code op) (code subject)
+                  (esc by)
+                  (if in-store
+                    (str (pill "ok" "persisted") " " (esc in-store))
+                    (str (pill "warn" "not persisted")
+                         " <span class=\"muted-text\">(audit only — not retained in commit record)</span>"))))))))
 
 (defn- registry-section [db]
   (let [rows (concat

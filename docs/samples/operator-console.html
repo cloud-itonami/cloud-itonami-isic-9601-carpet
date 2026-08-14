@@ -136,14 +136,14 @@
   </section>
   <section class="card">
     <h2>Approval attribution — measured, not assumed</h2>
-    <p class="lede">Every high-stakes act here is human-approved, so <em>who approved it</em> is part of the evidence a dispute turns on. This section walks each register the commit actually wrote to and reports whether the approver survived. <strong>Measured on this store</strong>: <code>:careplan/set</code> and <code>:fibre-screening/set</code> persist the proposal <code>:payload</code> (so the approver survives), while <code>:ticket/mark-cleaned</code> and <code>:ticket/mark-returned</code> are keyed off <code>path</code> only and drop it. Separately, the <code>:approval-granted</code> fact is written to the run's audit channel but never appended to the store ledger, so for the two actuations the approver is recoverable <em>only</em> from the audit trail. The lookup below is derived at render time — if the store is fixed, this page corrects itself.</p>
+    <p class="lede">Every high-stakes act here is human-approved, so <em>who approved it</em> is part of the evidence a dispute turns on. This section walks each register the commit actually wrote to and reports whether the approver survived. <strong>Measured on this run</strong>, not asserted: <code>screen</code>, <code>verify</code> retain the approver in the committed record, while <code>apply-cleaning-process</code>, <code>return-carpet</code> do not — for those the approver survives only in the run's audit channel, which is never appended to the store ledger. The lookup below is derived at render time, so if the store is fixed this page corrects itself on the next build.</p>
     <table>
       <thead><tr><th>Op</th><th>Ticket</th><th>Approver (audit trail)</th><th>Approver in commit record</th></tr></thead>
       <tbody>
         <tr><td><code>verify</code></td><td><code>ticket-1</code></td><td>op-1</td><td><span class="pill ok">persisted</span> op-1</td></tr>
         <tr><td><code>screen</code></td><td><code>ticket-1</code></td><td>op-1</td><td><span class="pill ok">persisted</span> op-1</td></tr>
-        <tr><td><code>apply-cleaning-process</code></td><td><code>ticket-1</code></td><td>op-1</td><td><span class="pill warn">not persisted</span> <span class="muted-text">(audit only — not in commit record)</span></td></tr>
-        <tr><td><code>return-carpet</code></td><td><code>ticket-1</code></td><td>op-1</td><td><span class="pill warn">not persisted</span> <span class="muted-text">(audit only — not in commit record)</span></td></tr>
+        <tr><td><code>apply-cleaning-process</code></td><td><code>ticket-1</code></td><td>op-1</td><td><span class="pill warn">not persisted</span> <span class="muted-text">(audit only — not retained in commit record)</span></td></tr>
+        <tr><td><code>return-carpet</code></td><td><code>ticket-1</code></td><td>op-1</td><td><span class="pill warn">not persisted</span> <span class="muted-text">(audit only — not retained in commit record)</span></td></tr>
         <tr><td><code>verify</code></td><td><code>ticket-3</code></td><td>op-1</td><td><span class="pill ok">persisted</span> op-1</td></tr>
         <tr><td><code>verify</code></td><td><code>ticket-5</code></td><td>op-1</td><td><span class="pill ok">persisted</span> op-1</td></tr>
       </tbody>
