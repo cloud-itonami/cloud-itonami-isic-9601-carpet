@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cloud-itonami-isic-9601-carpet · carpet &amp; rug cleaning operator console</title>
+<style>
+  :root {
+    --color-primitive-blue-100:#d9e6ff; --color-primitive-blue-900:#0017c1;
+    --color-primitive-green-50:#e6f5ec; --color-primitive-green-200:#9bd4b5;
+    --color-primitive-green-600:#259d63; --color-primitive-green-800:#197a4b;
+    --color-primitive-red-50:#fdeeee; --color-primitive-red-200:#ffbbbb;
+    --color-primitive-red-800:#ec0000; --color-primitive-red-900:#ce0000;
+    --color-primitive-yellow-50:#fbf5e0; --color-primitive-yellow-200:#ffe380;
+    --color-primitive-yellow-900:#927200;
+    --color-neutral-white:#ffffff;
+    --color-neutral-solid-gray-50:#f2f2f2; --color-neutral-solid-gray-100:#e6e6e6;
+    --color-neutral-solid-gray-200:#cccccc; --color-neutral-solid-gray-536:#767676;
+    --color-neutral-solid-gray-700:#4d4d4d; --color-neutral-solid-gray-800:#333333;
+    --color-neutral-solid-gray-900:#1a1a1a;
+    --font-family-sans:"Noto Sans JP",-apple-system,BlinkMacSystemFont,sans-serif;
+    --font-family-mono:"Noto Sans Mono",monospace;
+    /* semantic aliases, as upstream defines them */
+    --color-semantic-error-1:var(--color-primitive-red-800);
+    --color-semantic-error-2:var(--color-primitive-red-900);
+    --color-semantic-success-2:var(--color-primitive-green-800);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--color-neutral-solid-gray-50);
+       color:var(--color-neutral-solid-gray-900);
+       font-family:var(--font-family-sans);line-height:1.7;
+       -webkit-font-smoothing:antialiased}
+  header.bar{background:var(--color-primitive-blue-900);color:var(--color-neutral-white);
+             padding:28px 32px}
+  header.bar h1{margin:0 0 10px;font-size:1.45rem;line-height:1.4;font-weight:700}
+  header.bar .badge{display:inline-block;background:rgba(255,255,255,.14);
+                    border:1px solid rgba(255,255,255,.32);border-radius:4px;
+                    padding:5px 12px;font-size:.8rem}
+  header.bar .sub{margin:12px 0 0;font-size:.85rem;color:var(--color-primitive-blue-100)}
+  main{max-width:1180px;margin:0 auto;padding:28px 20px 64px}
+  section.card{background:var(--color-neutral-white);
+               border:1px solid var(--color-neutral-solid-gray-200);
+               border-radius:8px;padding:22px 24px;margin-bottom:22px}
+  section.card h2{margin:0 0 8px;font-size:1.1rem;font-weight:700;
+                  color:var(--color-primitive-blue-900)}
+  p.lede{margin:0 0 16px;font-size:.86rem;color:var(--color-neutral-solid-gray-700)}
+  table{width:100%;border-collapse:collapse;font-size:.82rem}
+  th,td{text-align:left;padding:8px 10px;
+        border-bottom:1px solid var(--color-neutral-solid-gray-100);
+        vertical-align:top}
+  th{background:var(--color-neutral-solid-gray-50);font-weight:700;
+     color:var(--color-neutral-solid-gray-800);white-space:nowrap}
+  tbody tr:last-child td{border-bottom:none}
+  code{font-family:var(--font-family-mono);font-size:.79rem;
+       background:var(--color-neutral-solid-gray-50);
+       border:1px solid var(--color-neutral-solid-gray-100);
+       border-radius:3px;padding:1px 5px;white-space:nowrap}
+  .pill{display:inline-block;border-radius:999px;padding:2px 10px;
+        font-size:.74rem;font-weight:700;white-space:nowrap}
+  .pill.ok{background:var(--color-primitive-green-50);
+           color:var(--color-semantic-success-2);
+           border:1px solid var(--color-primitive-green-200)}
+  .pill.bad{background:var(--color-primitive-red-50);
+            color:var(--color-semantic-error-2);
+            border:1px solid var(--color-primitive-red-200)}
+  .pill.warn{background:var(--color-primitive-yellow-50);
+             color:var(--color-primitive-yellow-900);
+             border:1px solid var(--color-primitive-yellow-200)}
+  .pill.muted{background:var(--color-neutral-solid-gray-50);
+              color:var(--color-neutral-solid-gray-536);
+              border:1px solid var(--color-neutral-solid-gray-200)}
+  .bad-text{color:var(--color-semantic-error-1)}
+  .ok-text{color:var(--color-semantic-success-2)}
+  .muted-text{color:var(--color-neutral-solid-gray-536);font-size:.78rem}
+  footer{max-width:1180px;margin:0 auto;padding:0 20px 48px;
+         font-size:.78rem;color:var(--color-neutral-solid-gray-536)}
+  footer code{background:var(--color-neutral-white)}
+</style>
+</head>
+<body>
+<header class="bar">
+  <h1>Carpet &amp; rug cleaning — Operator Console</h1>
+  <span class="badge">read-only sample · governor-gated · cleaning &amp; return ALWAYS human-approved</span>
+  <p class="sub">Generated at build time by <code>carpetcare.render-html</code> (<code>clojure -M:dev:render-html</code>) by executing the real <code>carpetcare.operation</code> StateGraph over <code>carpetcare.store/demo-data</code>. No hand-written rows, no timestamps — reruns are byte-identical.</p>
+</header>
+<main>
+  <section class="card">
+    <h2>Care tickets (SSoT)</h2>
+    <p class="lede">Every column is read back out of <code>carpetcare.store</code> after the run. <em>Recomputed moisture</em> is <code>carpetcare.registry/residual-moisture-rate</code> evaluated on the ticket's own dry/wet weights — the operator's claim is never trusted.</p>
+    <table>
+      <thead><tr><th>Ticket</th><th>Customer</th><th>Carpet</th><th>Fibre</th><th>Proposed process</th><th>Juris.</th><th>Claimed moisture</th><th>Recomputed</th><th>Lifecycle</th><th>Last decision</th></tr></thead>
+      <tbody>
+        <tr><td><code>ticket-1</code></td><td>Sakura Tanaka</td><td>Machine-made runner (routine clean)</td><td><code>synthetic</code></td><td><code>low-moisture-encapsulation</code></td><td>JPN</td><td>0.050</td><td>0.050</td><td><span class="pill ok">cleaned &amp; returned</span></td><td><span class="pill bad">HARD hold · scope-excluded</span></td></tr>
+        <tr><td><code>ticket-2</code></td><td>Atlantis Doe</td><td>Area rug (routine clean)</td><td><code>synthetic</code></td><td><code>low-moisture-encapsulation</code></td><td>ATL</td><td>0.050</td><td>0.050</td><td><span class="pill muted">in intake</span></td><td><span class="pill bad">HARD hold · no-spec-basis</span></td></tr>
+        <tr><td><code>ticket-3</code></td><td>鈴木一郎</td><td>Hand-knotted wool rug (stain removal)</td><td><code>wool</code></td><td><code>alkaline-detergent</code></td><td>JPN</td><td>0.050</td><td>0.050</td><td><span class="pill muted">in intake</span></td><td><span class="pill bad">HARD hold · cleaning-process-forbidden-by-fibre</span></td></tr>
+        <tr><td><code>ticket-4</code></td><td>田中花子</td><td>Naturally-dyed kilim (full clean)</td><td><code>natural-dye</code></td><td><code>low-moisture-encapsulation</code></td><td>JPN</td><td>0.050</td><td>0.050</td><td><span class="pill muted">in intake</span></td><td><span class="pill bad">HARD hold · colourfastness-not-confirmed</span></td></tr>
+        <tr><td><code>ticket-5</code></td><td>佐藤次郎</td><td>Jute-backed broadloom (extraction)</td><td><code>synthetic</code></td><td><code>low-moisture-encapsulation</code></td><td>JPN</td><td>0.050</td><td><strong class="bad-text">0.300</strong></td><td><span class="pill muted">in intake</span></td><td><span class="pill bad">HARD hold · moisture-claim-mismatch</span></td></tr>
+      </tbody>
+    </table>
+  </section>
+  <section class="card">
+    <h2>Governor rules — coverage measured in this run</h2>
+    <p class="lede">All 9 rules <code>carpetcare.governor</code> implements. The <em>Exercised</em> column is measured from the ledger this run produced, not asserted: a rule shown as exercised really did stop a real proposal below. The build fails if a rule the scenario claims to prove did not fire.</p>
+    <table>
+      <thead><tr><th>Rule</th><th>Why it cannot be argued down</th><th>Exercised</th><th>On</th></tr></thead>
+      <tbody>
+        <tr><td><code>op-not-allowed</code></td><td>提案 op が閉じた語彙の外 -- 構成上のスコープ違反</td><td><span class="pill ok">yes</span></td><td><code>ticket-1</code></td></tr>
+        <tr><td><code>no-spec-basis</code></td><td>法域に繊維表示/消費者保護の公式基準が無い -- 推測で要件を作らない</td><td><span class="pill ok">yes</span></td><td><code>ticket-2</code></td></tr>
+        <tr><td><code>evidence-incomplete</code></td><td>法域の必要書類（顧客同意/受取時状態/繊維鑑別/洗浄工程）が未充足</td><td><span class="pill ok">yes</span></td><td><code>ticket-1</code></td></tr>
+        <tr><td><code>colourfastness-not-confirmed</code></td><td>色堅牢度が未確認のまま湿式工程へ -- HARD、上書き不可</td><td><span class="pill ok">yes</span></td><td><code>ticket-4</code></td></tr>
+        <tr><td><code>cleaning-process-forbidden-by-fibre</code></td><td>台帳の繊維と提案工程から再計算した禁止組合せ -- 集合の所属で、下げられる閾値は無い</td><td><span class="pill ok">yes</span></td><td><code>ticket-3</code></td></tr>
+        <tr><td><code>moisture-claim-mismatch</code></td><td>申告残留水分率 ≠ 自身の乾湿重量から再計算した値 -- 推定ではなく恒等式</td><td><span class="pill ok">yes</span></td><td><code>ticket-5</code></td></tr>
+        <tr><td><code>already-cleaned</code></td><td>二重作動ガード（専用 boolean であって :status 値ではない）</td><td><span class="pill ok">yes</span></td><td><code>ticket-1</code></td></tr>
+        <tr><td><code>already-returned</code></td><td>同じ敷物の二度目の返却</td><td><span class="pill ok">yes</span></td><td><code>ticket-1</code></td></tr>
+        <tr><td><code>scope-excluded</code></td><td>恒久的にスコープ外の判断（賠償責任・鑑定価格・ISIC 自己認定）に触れる文言</td><td><span class="pill ok">yes</span></td><td><code>ticket-1</code></td></tr>
+      </tbody>
+    </table>
+  </section>
+  <section class="card">
+    <h2>HARD holds this run (9)</h2>
+    <p class="lede">Each row is a real <code>:governor-hold</code> fact from the append-only ledger. A HARD hold is never escalated to a human — it does not reach the approval queue at all, so there is no one to talk out of it.</p>
+    <table>
+      <thead><tr><th>Op</th><th>Ticket</th><th>Rules</th><th>Governor's own detail</th></tr></thead>
+      <tbody>
+        <tr><td><code>apply-cleaning-process</code></td><td><code>ticket-1</code></td><td><span class="pill bad">evidence-incomplete</span></td><td>法域の必要書類(顧客同意記録/受取時状態記録/繊維鑑別記録/洗浄工程記録)が充足していない</td></tr>
+        <tr><td><code>apply-cleaning-process</code></td><td><code>ticket-1</code></td><td><span class="pill bad">already-cleaned</span></td><td>ticket-1 は既に洗浄処理済み</td></tr>
+        <tr><td><code>return-carpet</code></td><td><code>ticket-1</code></td><td><span class="pill bad">already-returned</span></td><td>ticket-1 は既に返却済み</td></tr>
+        <tr><td><code>verify</code></td><td><code>ticket-2</code></td><td><span class="pill bad">no-spec-basis</span></td><td>公式spec-basis(繊維表示/消費者保護)の引用が無い提案は運営基準として扱えない</td></tr>
+        <tr><td><code>apply-cleaning-process</code></td><td><code>ticket-3</code></td><td><span class="pill bad">cleaning-process-forbidden-by-fibre</span></td><td>ticket-3 の提案洗浄工程(:alkaline-detergent)が繊維:woolの禁止工程に含まれている</td></tr>
+        <tr><td><code>screen</code></td><td><code>ticket-4</code></td><td><span class="pill bad">colourfastness-not-confirmed</span></td><td>色堅牢度が未確認の状態で湿式工程に進む提案は進められない</td></tr>
+        <tr><td><code>apply-cleaning-process</code></td><td><code>ticket-5</code></td><td><span class="pill bad">moisture-claim-mismatch</span></td><td>ticket-5 の申告残留水分率(0.05)が乾湿重量から再計算した値と一致しない</td></tr>
+        <tr><td><code>appraise-value</code></td><td><code>ticket-1</code></td><td><span class="pill bad">op-not-allowed</span></td><td>:actuation/appraise-value はこの actor の語彙に存在しない</td></tr>
+        <tr><td><code>verify</code></td><td><code>ticket-1</code></td><td><span class="pill bad">scope-excluded</span></td><td>恒久的にスコープ外の判断に触れる文言を含む: appraised value</td></tr>
+      </tbody>
+    </table>
+  </section>
+  <section class="card">
+    <h2>Approval attribution — measured, not assumed</h2>
+    <p class="lede">Every high-stakes act here is human-approved, so <em>who approved it</em> is part of the evidence a dispute turns on. This section walks each register the commit actually wrote to and reports whether the approver survived. <strong>Measured on this run</strong>, not asserted: <code>screen</code>, <code>verify</code> retain the approver in the committed record, while <code>apply-cleaning-process</code>, <code>return-carpet</code> do not — for those the approver survives only in the run's audit channel, which is never appended to the store ledger. The lookup below is derived at render time, so if the store is fixed this page corrects itself on the next build.</p>
+    <table>
+      <thead><tr><th>Op</th><th>Ticket</th><th>Approver (audit trail)</th><th>Approver in commit record</th></tr></thead>
+      <tbody>
+        <tr><td><code>verify</code></td><td><code>ticket-1</code></td><td>op-1</td><td><span class="pill ok">persisted</span> op-1</td></tr>
+        <tr><td><code>screen</code></td><td><code>ticket-1</code></td><td>op-1</td><td><span class="pill ok">persisted</span> op-1</td></tr>
+        <tr><td><code>apply-cleaning-process</code></td><td><code>ticket-1</code></td><td>op-1</td><td><span class="pill warn">not persisted</span> <span class="muted-text">(audit only — not retained in commit record)</span></td></tr>
+        <tr><td><code>return-carpet</code></td><td><code>ticket-1</code></td><td>op-1</td><td><span class="pill warn">not persisted</span> <span class="muted-text">(audit only — not retained in commit record)</span></td></tr>
+        <tr><td><code>verify</code></td><td><code>ticket-3</code></td><td>op-1</td><td><span class="pill ok">persisted</span> op-1</td></tr>
+        <tr><td><code>verify</code></td><td><code>ticket-5</code></td><td>op-1</td><td><span class="pill ok">persisted</span> op-1</td></tr>
+      </tbody>
+    </table>
+  </section>
+  <section class="card">
+    <h2>Op vocabulary (closed)</h2>
+    <p class="lede">The whole vocabulary is 5 ops. <strong>No op settles a damage-liability decision, appraises the rug's value, or declares its own ISIC classification authoritative</strong> — those are absent from the vocabulary, not merely gated. High-stakes membership is a set of <em>ops</em>, never the advisor's own self-reported <code>:stake</code>.</p>
+    <table>
+      <thead><tr><th>Op</th><th>High-stakes</th><th>Auto-committable at any phase</th></tr></thead>
+      <tbody>
+        <tr><td><code>apply-cleaning-process</code></td><td><span class="pill warn">ALWAYS human approval</span></td><td><span class="pill muted">never</span></td></tr>
+        <tr><td><code>intake</code></td><td><span class="pill muted">no</span></td><td><span class="pill ok">yes — phase 3</span></td></tr>
+        <tr><td><code>return-carpet</code></td><td><span class="pill warn">ALWAYS human approval</span></td><td><span class="pill muted">never</span></td></tr>
+        <tr><td><code>screen</code></td><td><span class="pill muted">no</span></td><td><span class="pill muted">never</span></td></tr>
+        <tr><td><code>verify</code></td><td><span class="pill muted">no</span></td><td><span class="pill muted">never</span></td></tr>
+      </tbody>
+    </table>
+  </section>
+  <section class="card">
+    <h2>Rollout phases</h2>
+    <p class="lede">Read out of <code>carpetcare.phase/phases</code>. Derived check: the high-stakes actuations appearing in any phase's auto set = <strong class="ok-text">none</strong> — the permanent invariant holds. Two layers assert it independently (<code>phase</code> and <code>governor/high-stakes</code>).</p>
+    <table>
+      <thead><tr><th>Phase</th><th>Label</th><th>May write</th><th>May auto-commit</th></tr></thead>
+      <tbody>
+        <tr><td>0</td><td>read-only</td><td><span class="pill muted">nothing</span></td><td><span class="pill muted">nothing</span></td></tr>
+        <tr><td>1</td><td>assisted-intake</td><td><code>intake</code></td><td><span class="pill muted">nothing</span></td></tr>
+        <tr><td>2</td><td>assisted-verify</td><td><code>intake</code> <code>screen</code> <code>verify</code></td><td><span class="pill muted">nothing</span></td></tr>
+        <tr><td>3</td><td>supervised-auto</td><td><code>apply-cleaning-process</code> <code>intake</code> <code>return-carpet</code> <code>screen</code> <code>verify</code></td><td><code>intake</code></td></tr>
+      </tbody>
+    </table>
+  </section>
+  <section class="card">
+    <h2>Registry records issued</h2>
+    <p class="lede">Drafted by <code>carpetcare.registry</code> and numbered from a per-jurisdiction sequence held by the store. Only ops that cleared the governor AND a human approval reach this table.</p>
+    <table>
+      <thead><tr><th>Event</th><th>Number</th><th>Ticket</th><th>Jurisdiction</th></tr></thead>
+      <tbody>
+        <tr><td><span class="pill ok">cleaning applied</span></td><td><code>CLN-JPN-0001</code></td><td><code>ticket-1</code></td><td>JPN</td></tr>
+        <tr><td><span class="pill ok">carpet returned</span></td><td><code>RET-JPN-0001</code></td><td><code>ticket-1</code></td><td>JPN</td></tr>
+      </tbody>
+    </table>
+  </section>
+  <section class="card">
+    <h2>Jurisdiction spec-basis coverage</h2>
+    <p class="lede">3 jurisdictions seeded with an official spec-basis. A jurisdiction outside this set has NO basis on file and every proposal touching it is held. Jurisdictions appearing on this run's tickets: <code>ATL</code>, <code>JPN</code>.</p>
+    <table>
+      <thead><tr><th>Jurisdiction</th><th>Legal basis</th><th>Consumer basis</th><th>Required evidence</th><th>On this run's tickets</th></tr></thead>
+      <tbody>
+        <tr><td><code>ATL</code></td><td><span class="pill bad">NO BASIS ON FILE</span></td><td>—</td><td>—</td><td><span class="pill ok">yes</span></td></tr>
+        <tr><td><code>DEU</code></td><td>Textilkennzeichnungsgesetz (TextilKennzG)</td><td>BGB SS 631 ff. (Werkvertrag)</td><td>4 records</td><td><span class="pill muted">no</span></td></tr>
+        <tr><td><code>JPN</code></td><td>クリーニング業法 第3条（営業者の届出・遵守事項）</td><td>消費者契約法 / クリーニング事故賠償基準（全国クリーニング生活衛生同業組合連合会）</td><td>4 records</td><td><span class="pill ok">yes</span></td></tr>
+        <tr><td><code>USA</code></td><td>FTC Care Labeling Rule (16 CFR Part 423)</td><td>State consumer-protection statutes (varies by state)</td><td>4 records</td><td><span class="pill muted">no</span></td></tr>
+      </tbody>
+    </table>
+  </section>
+  <section class="card">
+    <h2>Audit ledger — append-only (16 facts)</h2>
+    <p class="lede">The complete decision-fact log this scenario produced. "Which rug was screened, which process was applied, which rug was handed back, on what jurisdictional basis" is always a query over an immutable log.</p>
+    <table>
+      <thead><tr><th>#</th><th>Fact</th><th>Op</th><th>Ticket</th><th>Basis / rules</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td><span class="pill ok">committed</span></td><td><code>intake</code></td><td><code>ticket-1</code></td><td>id, customer</td></tr>
+        <tr><td>2</td><td><span class="pill bad">governor-hold</span></td><td><code>apply-cleaning-process</code></td><td><code>ticket-1</code></td><td>evidence-incomplete</td></tr>
+        <tr><td>3</td><td><span class="pill ok">committed</span></td><td><code>verify</code></td><td><code>ticket-1</code></td><td>クリーニング業法 第3条（営業者の届出・遵守事項）, 消費者契約法 / クリーニング事故賠償基準（全国クリーニング生活衛生同業組合連合会）, e-Gov 法令検索 昭和25年法律第207号</td></tr>
+        <tr><td>4</td><td><span class="pill ok">committed</span></td><td><code>screen</code></td><td><code>ticket-1</code></td><td>colourfastness-test</td></tr>
+        <tr><td>5</td><td><span class="pill ok">committed</span></td><td><code>apply-cleaning-process</code></td><td><code>ticket-1</code></td><td>クリーニング業法 第3条（営業者の届出・遵守事項）, ticket-1</td></tr>
+        <tr><td>6</td><td><span class="pill ok">committed</span></td><td><code>return-carpet</code></td><td><code>ticket-1</code></td><td>クリーニング業法 第3条（営業者の届出・遵守事項）, ticket-1</td></tr>
+        <tr><td>7</td><td><span class="pill bad">governor-hold</span></td><td><code>apply-cleaning-process</code></td><td><code>ticket-1</code></td><td>already-cleaned</td></tr>
+        <tr><td>8</td><td><span class="pill bad">governor-hold</span></td><td><code>return-carpet</code></td><td><code>ticket-1</code></td><td>already-returned</td></tr>
+        <tr><td>9</td><td><span class="pill bad">governor-hold</span></td><td><code>verify</code></td><td><code>ticket-2</code></td><td>no-spec-basis</td></tr>
+        <tr><td>10</td><td><span class="pill ok">committed</span></td><td><code>verify</code></td><td><code>ticket-3</code></td><td>クリーニング業法 第3条（営業者の届出・遵守事項）, 消費者契約法 / クリーニング事故賠償基準（全国クリーニング生活衛生同業組合連合会）, e-Gov 法令検索 昭和25年法律第207号</td></tr>
+        <tr><td>11</td><td><span class="pill bad">governor-hold</span></td><td><code>apply-cleaning-process</code></td><td><code>ticket-3</code></td><td>cleaning-process-forbidden-by-fibre</td></tr>
+        <tr><td>12</td><td><span class="pill bad">governor-hold</span></td><td><code>screen</code></td><td><code>ticket-4</code></td><td>colourfastness-not-confirmed</td></tr>
+        <tr><td>13</td><td><span class="pill ok">committed</span></td><td><code>verify</code></td><td><code>ticket-5</code></td><td>クリーニング業法 第3条（営業者の届出・遵守事項）, 消費者契約法 / クリーニング事故賠償基準（全国クリーニング生活衛生同業組合連合会）, e-Gov 法令検索 昭和25年法律第207号</td></tr>
+        <tr><td>14</td><td><span class="pill bad">governor-hold</span></td><td><code>apply-cleaning-process</code></td><td><code>ticket-5</code></td><td>moisture-claim-mismatch</td></tr>
+        <tr><td>15</td><td><span class="pill bad">governor-hold</span></td><td><code>appraise-value</code></td><td><code>ticket-1</code></td><td>op-not-allowed</td></tr>
+        <tr><td>16</td><td><span class="pill bad">governor-hold</span></td><td><code>verify</code></td><td><code>ticket-1</code></td><td>scope-excluded</td></tr>
+      </tbody>
+    </table>
+  </section>
+</main>
+<footer>
+  <p>This actor declares its own operating model — an off-premises intake, where the rug is collected, cleaned and returned — and claims nothing beyond it. This workspace's ISIC mirror does not enumerate carpet cleaning in any class; ISIC 9601's &ldquo;washing, cleaning, dyeing and pressing of textile products&rdquo; is the reading it operates under, not an authoritative self-classification. See <code>docs/adr/0001-architecture.md</code>.</p>
+</footer>
+</body>
+</html>

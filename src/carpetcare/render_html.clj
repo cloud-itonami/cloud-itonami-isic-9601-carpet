@@ -1,0 +1,677 @@
+(ns carpetcare.render-html
+  "Build-time HTML renderer for `docs/samples/operator-console.html`.
+
+  Closes flagship checklist item 2: this repo previously had no demo page
+  and no generator. This namespace drives the REAL actor stack
+  (`carpetcare.operation` -> `carpetcare.governor` -> `carpetcare.store`,
+  compiled and executed as a langgraph StateGraph via
+  `langgraph.graph/run*`) over this repo's own seeded ticket set
+  (`carpetcare.store/demo-data`, ids `ticket-1`..`ticket-5`) and renders
+  the result.
+
+  **Nothing on the page is hand-typed telemetry.** Ticket fields, hold
+  reasons, registry numbers, phase tables, jurisdiction coverage and the
+  approval-attribution audit are all read back out of the live store and
+  the live run's audit channel. The only hand-written strings are the
+  per-rule prose descriptions in `rule-catalogue`, which document the
+  governor's own rules; whether each rule actually FIRED in this run is
+  measured, never asserted.
+
+  ## Determinism
+
+  No timestamps, no randomness, no wall-clock, no locale-dependent
+  formatting (`fmt3` pins `Locale/ROOT`). Two consecutive runs against
+  the same seed are byte-identical.
+
+  ## Build-time invariant
+
+  `-main` THROWS unless the run actually produced HARD `:governor-hold`
+  records, and unless every rule the scenario declares it will prove was
+  in fact proven. A silent run that holds nothing must not be able to
+  publish a page claiming the governor works. (Precedent: isic-2513.)
+
+  Usage: `clojure -M:dev:render-html [out-file]`
+  (default `docs/samples/operator-console.html`)."
+  (:require [clojure.set :as set]
+            [clojure.string :as str]
+            [carpetcare.advisor :as advisor]
+            [carpetcare.facts :as facts]
+            [carpetcare.governor :as governor]
+            [carpetcare.operation :as op]
+            [carpetcare.phase :as phase]
+            [carpetcare.registry :as registry]
+            [carpetcare.store :as store]
+            [langgraph.graph :as g]))
+
+(def ^:private operator
+  {:actor-id "op-1" :actor-role :cleaning-supervisor :phase 3})
+
+;; ----------------------------- the run -----------------------------
+
+(defn- valuation-reaching-advisor
+  "A deliberately mis-behaving advisor, injected through
+  `carpetcare.operation/build`'s documented `:advisor` seam.
+
+  It drafts an otherwise well-formed `:careplan/verify` proposal -- valid
+  citations, high confidence -- and then reaches, in its own prose, for a
+  decision this actor has no op for: appraising the rug's value.
+
+  This is the exact situation `carpetcare.governor`'s scope-exclusion
+  check exists for (see that namespace's docstring: \"If a real LLM
+  advisor describes one in prose, the governor's scope-exclusion check
+  catches it on the way through\"). The honest `mock-advisor` can never
+  reach that rule, so exercising it needs an advisor that tries. The
+  governor censoring it is real; only the advisor is adversarial."
+  []
+  (reify advisor/Advisor
+    (-advise [_ st request]
+      (let [p (advisor/infer st request)]
+        (assoc p :rationale
+               (str (:rationale p)
+                    " なお本件は市場相場に照らした appraised value を "
+                    "併せて確定し、以後の賠償上限として扱う。"))))))
+
+(def ^:private scenario
+  "The scenario as DATA, so each step can declare what it intends to
+  prove and the build can verify it afterwards.
+
+  `:expect` is the governor rule this step exists to demonstrate; `nil`
+  means the step is expected to clear the governor (and, for every write
+  op at phase 3 except `:ticket/intake`, to escalate to a human).
+
+  Ordering matters and is load-bearing: `ticket-1` attempts its cleaning
+  BEFORE its care plan is verified (isolating `:evidence-incomplete`),
+  and attempts it again AFTER it has been cleaned (isolating
+  `:already-cleaned`)."
+  [{:tid "t1-intake"  :approve? false :expect nil
+    :note "phase-3 auto-commit: intake is the only op any phase may auto-commit"
+    :request {:op :ticket/intake :subject "ticket-1"
+              :patch {:id "ticket-1" :customer "Sakura Tanaka"}}}
+
+   {:tid "t1-early-clean" :approve? false :expect :evidence-incomplete
+    :note "cleaning attempted before the care plan exists"
+    :request {:op :actuation/apply-cleaning-process :subject "ticket-1"}}
+
+   {:tid "t1-careplan" :approve? true :expect nil
+    :note "JPN spec-basis on file; escalates for approval"
+    :request {:op :careplan/verify :subject "ticket-1"}}
+
+   {:tid "t1-fibre" :approve? true :expect nil
+    :note "colourfastness confirmed; escalates for approval"
+    :request {:op :fibre/screen :subject "ticket-1"}}
+
+   {:tid "t1-clean" :approve? true :expect nil
+    :note "ALWAYS human-approved; never auto at any phase"
+    :request {:op :actuation/apply-cleaning-process :subject "ticket-1"}}
+
+   {:tid "t1-return" :approve? true :expect nil
+    :note "ALWAYS human-approved; bailment -- possession returns, title never moved"
+    :request {:op :actuation/return-carpet :subject "ticket-1"}}
+
+   {:tid "t1-reclean" :approve? false :expect :already-cleaned
+    :note "double-actuation guard off a dedicated boolean, not a :status"
+    :request {:op :actuation/apply-cleaning-process :subject "ticket-1"}}
+
+   {:tid "t1-rereturn" :approve? false :expect :already-returned
+    :note "second return of the same rug"
+    :request {:op :actuation/return-carpet :subject "ticket-1"}}
+
+   {:tid "t2-careplan" :approve? false :expect :no-spec-basis
+    :note "jurisdiction ATL has no textile/consumer basis on file"
+    :request {:op :careplan/verify :subject "ticket-2"}}
+
+   {:tid "t3-careplan" :approve? true :expect nil
+    :note "ticket-3's own care plan clears, so the next hold is isolated"
+    :request {:op :careplan/verify :subject "ticket-3"}}
+
+   {:tid "t3-clean" :approve? false :expect :cleaning-process-forbidden-by-fibre
+    :note "alkaline detergent on a hand-knotted wool rug -- felts and yellows irreversibly"
+    :request {:op :actuation/apply-cleaning-process :subject "ticket-3"}}
+
+   {:tid "t4-fibre" :approve? false :expect :colourfastness-not-confirmed
+    :note "naturally-dyed kilim; the screening holds on its own finding"
+    :request {:op :fibre/screen :subject "ticket-4"}}
+
+   {:tid "t5-careplan" :approve? true :expect nil
+    :note "ticket-5's own care plan clears, so the next hold is isolated"
+    :request {:op :careplan/verify :subject "ticket-5"}}
+
+   {:tid "t5-clean" :approve? false :expect :moisture-claim-mismatch
+    :note "claimed 0.05 vs (5200-4000)/4000 recomputed from its own weights"
+    :request {:op :actuation/apply-cleaning-process :subject "ticket-5"}}
+
+   {:tid "x-vocab" :approve? false :expect :op-not-allowed
+    :note "an op outside the closed five-op vocabulary"
+    :request {:op :actuation/appraise-value :subject "ticket-1"}}
+
+   {:tid "x-scope" :approve? false :expect :scope-excluded :adversarial? true
+    :note "advisor prose reaching for a permanently out-of-scope valuation"
+    :request {:op :careplan/verify :subject "ticket-1"}}])
+
+(defn run-demo!
+  "Executes `scenario` against a freshly seeded store through the real
+  compiled graph. Returns `{:db .. :audit .. :steps ..}` where `:audit`
+  is the concatenated per-thread audit channel (last state per thread,
+  in first-execution order) and `:steps` is the scenario annotated with
+  what each step actually produced."
+  []
+  (let [db        (store/seed-db)
+        honest    (op/build db)
+        adversary (op/build db {:advisor (valuation-reaching-advisor)})
+        audits    (atom [])
+        record!   (fn [tid res]
+                    (swap! audits conj {:tid tid
+                                        :audit (vec (get-in res [:state :audit]))})
+                    res)]
+    (doseq [{:keys [tid request approve? adversarial?]} scenario]
+      (let [actor (if adversarial? adversary honest)]
+        (record! tid (g/run* actor {:request request :context operator}
+                             {:thread-id tid}))
+        (when approve?
+          (record! tid (g/run* actor {:approval {:status :approved :by "op-1"}}
+                               {:thread-id tid :resume? true})))))
+    ;; Collapse to the FINAL audit per thread (a resumed run replays the
+    ;; checkpointed audit, so keeping both copies would double-count),
+    ;; preserving first-execution order.
+    (let [entries @audits
+          order   (distinct (map :tid entries))
+          by-tid  (reduce (fn [m e] (assoc m (:tid e) (:audit e))) {} entries)]
+      {:db    db
+       :steps scenario
+       :audit (vec (mapcat by-tid order))})))
+
+;; ----------------------------- derivations -----------------------------
+
+(defn- holds
+  "Every HARD hold this run actually wrote to the append-only ledger."
+  [db]
+  (filterv #(= :governor-hold (:t %)) (store/ledger db)))
+
+(defn- fired-rules [db]
+  (into #{} (mapcat :basis) (holds db)))
+
+(def ^:private rule-catalogue
+  "Every rule `carpetcare.governor` implements, with the reason it cannot
+  be argued down. The prose documents the rule; the `fired?` column on
+  the page is measured from the run, not from this table."
+  [[:op-not-allowed
+    "提案 op が閉じた語彙の外 -- 構成上のスコープ違反"]
+   [:no-spec-basis
+    "法域に繊維表示/消費者保護の公式基準が無い -- 推測で要件を作らない"]
+   [:evidence-incomplete
+    "法域の必要書類（顧客同意/受取時状態/繊維鑑別/洗浄工程）が未充足"]
+   [:colourfastness-not-confirmed
+    "色堅牢度が未確認のまま湿式工程へ -- HARD、上書き不可"]
+   [:cleaning-process-forbidden-by-fibre
+    "台帳の繊維と提案工程から再計算した禁止組合せ -- 集合の所属で、下げられる閾値は無い"]
+   [:moisture-claim-mismatch
+    "申告残留水分率 ≠ 自身の乾湿重量から再計算した値 -- 推定ではなく恒等式"]
+   [:already-cleaned
+    "二重作動ガード（専用 boolean であって :status 値ではない）"]
+   [:already-returned
+    "同じ敷物の二度目の返却"]
+   [:scope-excluded
+    "恒久的にスコープ外の判断（賠償責任・鑑定価格・ISIC 自己認定）に触れる文言"]])
+
+(defn- approval-facts
+  "`:approval-granted` facts from the live run's audit channel."
+  [audit]
+  (filterv #(= :approval-granted (:t %)) audit))
+
+(defn- approver-in-commit-record
+  "DERIVED, not hardcoded: walk the register this op's effect actually
+  writes to and report whether an approver key survived into the
+  committed SSoT record.
+
+  This is deliberately a live lookup rather than a constant, so that if
+  `carpetcare.store/commit-record!` is later changed to carry `:payload`
+  through the two actuation effects, this page starts saying so on its
+  own instead of continuing to publish a stale claim."
+  [db {:keys [op subject]}]
+  (case op
+    :careplan/verify (:approved-by (store/careplan-of db subject))
+    :fibre/screen    (:approved-by (store/fibre-screening-of db subject))
+    :actuation/apply-cleaning-process
+    (or (:approved-by (store/ticket db subject))
+        (some #(get % "approved_by")
+              (filter #(= subject (get % "ticket_id")) (store/cleaning-history db))))
+    :actuation/return-carpet
+    (or (:approved-by (store/ticket db subject))
+        (some #(get % "approved_by")
+              (filter #(= subject (get % "ticket_id")) (store/return-history db))))
+    nil))
+
+(defn- jurisdictions-in-use [db]
+  (into (sorted-set) (keep :jurisdiction (store/all-tickets db))))
+
+;; ----------------------------- html helpers -----------------------------
+
+(defn- esc [v]
+  (-> (if (nil? v) "" (str v))
+      (str/replace "&" "&amp;")
+      (str/replace "<" "&lt;")
+      (str/replace ">" "&gt;")
+      (str/replace "\"" "&quot;")))
+
+(defn- nm [v] (if (keyword? v) (name v) (str v)))
+
+(defn- fmt3
+  "Locale-pinned so the page is byte-identical on a machine whose default
+  locale uses a decimal comma."
+  [x]
+  (if (number? x)
+    (String/format java.util.Locale/ROOT "%.3f" (into-array Object [(double x)]))
+    "—"))
+
+(defn- code [v] (str "<code>" (esc (nm v)) "</code>"))
+
+(defn- pill [cls label] (str "<span class=\"pill " cls "\">" (esc label) "</span>"))
+
+(defn- tr [& cells] (str "        <tr>" (str/join (map #(str "<td>" % "</td>") cells)) "</tr>"))
+
+(defn- table [headers rows]
+  (str "    <table>\n"
+       "      <thead><tr>"
+       (str/join (map #(str "<th>" (esc %) "</th>") headers))
+       "</tr></thead>\n"
+       "      <tbody>\n"
+       (str/join "\n" rows) "\n"
+       "      </tbody>\n"
+       "    </table>\n"))
+
+(defn- section [title lede body]
+  (str "  <section class=\"card\">\n"
+       "    <h2>" (esc title) "</h2>\n"
+       "    <p class=\"lede\">" lede "</p>\n"
+       body
+       "  </section>\n"))
+
+;; ----------------------------- sections -----------------------------
+
+(defn- last-fact-for [ledger id]
+  (last (filter #(= (:subject %) id) ledger)))
+
+(defn- status-cell [ledger id]
+  (let [f (last-fact-for ledger id)]
+    (cond
+      (nil? f) (pill "muted" "no activity")
+      (= :committed (:t f)) (pill "ok" "committed")
+      (= :governor-hold (:t f))
+      (pill "bad" (str "HARD hold · " (str/join ", " (map nm (:basis f)))))
+      :else (pill "muted" (nm (:t f))))))
+
+(defn- lifecycle-cell [{:keys [cleaning-applied? carpet-returned?]}]
+  (cond
+    carpet-returned?  (pill "ok" "cleaned & returned")
+    cleaning-applied? (pill "warn" "cleaned, not yet returned")
+    :else             (pill "muted" "in intake")))
+
+(defn- tickets-section [db]
+  (let [ledger (store/ledger db)]
+    (section
+     "Care tickets (SSoT)"
+     (str "Every column is read back out of <code>carpetcare.store</code> after the run. "
+          "<em>Recomputed moisture</em> is <code>carpetcare.registry/residual-moisture-rate</code> "
+          "evaluated on the ticket's own dry/wet weights — the operator's claim is never trusted.")
+     (table ["Ticket" "Customer" "Carpet" "Fibre" "Proposed process" "Juris."
+             "Claimed moisture" "Recomputed" "Lifecycle" "Last decision"]
+            (for [{:keys [id customer carpet fibre proposed-cleaning-process
+                          jurisdiction claimed-residual-moisture] :as t}
+                  (store/all-tickets db)]
+              (tr (code id) (esc customer) (esc carpet) (code fibre)
+                  (code proposed-cleaning-process)
+                  (esc jurisdiction)
+                  (fmt3 claimed-residual-moisture)
+                  (let [actual (registry/residual-moisture-rate t)]
+                    (if (registry/moisture-claim-mismatch? t)
+                      (str "<strong class=\"bad-text\">" (fmt3 actual) "</strong>")
+                      (fmt3 actual)))
+                  (lifecycle-cell t)
+                  (status-cell ledger id)))))))
+
+(defn- vocabulary-section []
+  (section
+   "Op vocabulary (closed)"
+   (str "The whole vocabulary is " (count governor/allowed-ops)
+        " ops. <strong>No op settles a damage-liability decision, appraises the rug's "
+        "value, or declares its own ISIC classification authoritative</strong> — those "
+        "are absent from the vocabulary, not merely gated. High-stakes membership is a "
+        "set of <em>ops</em>, never the advisor's own self-reported <code>:stake</code>.")
+   (table ["Op" "High-stakes" "Auto-committable at any phase"]
+          (for [o (sort-by nm governor/allowed-ops)]
+            (tr (code o)
+                (if (contains? governor/high-stakes o)
+                  (pill "warn" "ALWAYS human approval")
+                  (pill "muted" "no"))
+                (if (contains? (phase/auto-eligible-ops) o)
+                  (pill "ok" "yes — phase 3")
+                  (pill "muted" "never")))))))
+
+(defn- phases-section []
+  (let [overlap (set/intersection (phase/auto-eligible-ops) governor/high-stakes)]
+    (section
+     "Rollout phases"
+     (str "Read out of <code>carpetcare.phase/phases</code>. Derived check: the "
+          "high-stakes actuations appearing in any phase's auto set = "
+          (if (empty? overlap)
+            "<strong class=\"ok-text\">none</strong> — the permanent invariant holds"
+            (str "<strong class=\"bad-text\">" (esc (pr-str overlap)) "</strong>"))
+          ". Two layers assert it independently (<code>phase</code> and "
+          "<code>governor/high-stakes</code>).")
+     (table ["Phase" "Label" "May write" "May auto-commit"]
+            (for [[n {:keys [label writes auto]}] (sort-by key phase/phases)]
+              (tr (str n) (esc label)
+                  (if (seq writes)
+                    (str/join " " (map code (sort-by nm writes)))
+                    (pill "muted" "nothing"))
+                  (if (seq auto)
+                    (str/join " " (map code (sort-by nm auto)))
+                    (pill "muted" "nothing"))))))))
+
+(defn- rules-section [db]
+  (let [fired (fired-rules db)]
+    (section
+     "Governor rules — coverage measured in this run"
+     (str "All " (count rule-catalogue) " rules <code>carpetcare.governor</code> "
+          "implements. The <em>Exercised</em> column is measured from the ledger this "
+          "run produced, not asserted: a rule shown as exercised really did stop a real "
+          "proposal below. The build fails if a rule the scenario claims to prove did not fire.")
+     (table ["Rule" "Why it cannot be argued down" "Exercised" "On"]
+            (for [[rule why] rule-catalogue]
+              (let [hit (filter #(some #{rule} (:basis %)) (holds db))]
+                (tr (code rule) (esc why)
+                    (if (contains? fired rule)
+                      (pill "ok" "yes")
+                      (pill "muted" "not in this scenario"))
+                    (if (seq hit)
+                      (str/join ", " (distinct (map #(code (:subject %)) hit)))
+                      "—"))))))))
+
+(defn- holds-section [db]
+  (let [hs (holds db)]
+    (section
+     (str "HARD holds this run (" (count hs) ")")
+     (str "Each row is a real <code>:governor-hold</code> fact from the append-only "
+          "ledger. A HARD hold is never escalated to a human — it does not reach the "
+          "approval queue at all, so there is no one to talk out of it.")
+     (table ["Op" "Ticket" "Rules" "Governor's own detail"]
+            (for [h hs]
+              (tr (code (:op h)) (code (:subject h))
+                  (str/join " " (map #(pill "bad" (nm %)) (:basis h)))
+                  (str/join "<br>" (map #(esc (:detail %)) (:violations h)))))))))
+
+(defn- attribution-section
+  "The prose verdict here is DERIVED from the same live lookup that fills
+  the table, never hardcoded. An earlier revision spelled out in prose
+  which registers drop `:payload`; that sentence would have kept
+  asserting a defect after the defect was fixed, because only the table
+  below was self-correcting. Both are measured now."
+  [db audit]
+  (let [rows      (mapv (fn [{:keys [op subject by]}]
+                          {:op op :subject subject :by by
+                           :in-store (approver-in-commit-record
+                                      db {:op op :subject subject})})
+                        (approval-facts audit))
+        persisted (into (sorted-set) (map (comp nm :op)) (filter :in-store rows))
+        dropped   (into (sorted-set) (map (comp nm :op)) (remove :in-store rows))
+        join-ops  (fn [ops] (str/join ", " (map code ops)))]
+    (section
+     "Approval attribution — measured, not assumed"
+     (str "Every high-stakes act here is human-approved, so <em>who approved it</em> is "
+          "part of the evidence a dispute turns on. This section walks each register the "
+          "commit actually wrote to and reports whether the approver survived. "
+          "<strong>Measured on this run</strong>, not asserted: "
+          (cond
+            (empty? rows)
+            "this run produced no approvals to attribute."
+
+            (empty? dropped)
+            (str "every approved op (" (join-ops persisted) ") retained its approver "
+                 "in the committed record.")
+
+            (empty? persisted)
+            (str "no approved op (" (join-ops dropped) ") retained its approver in the "
+                 "committed record — it survives only in the run's audit channel, which "
+                 "is never appended to the store ledger.")
+
+            :else
+            (str (join-ops persisted) (if (= 1 (count persisted)) " retains" " retain")
+                 " the approver in the committed record, while "
+                 (join-ops dropped) (if (= 1 (count dropped)) " does" " do")
+                 " not — for those the approver survives only in the run's audit "
+                 "channel, which is never appended to the store ledger."))
+          " The lookup below is derived at render time, so if the store is fixed this "
+          "page corrects itself on the next build.")
+     (table ["Op" "Ticket" "Approver (audit trail)" "Approver in commit record"]
+            (for [{:keys [op subject by in-store]} rows]
+              (tr (code op) (code subject)
+                  (esc by)
+                  (if in-store
+                    (str (pill "ok" "persisted") " " (esc in-store))
+                    (str (pill "warn" "not persisted")
+                         " <span class=\"muted-text\">(audit only — not retained in commit record)</span>"))))))))
+
+(defn- registry-section [db]
+  (let [rows (concat
+              (for [r (store/cleaning-history db)]
+                (tr (pill "ok" "cleaning applied")
+                    (code (get r "cleaning_number"))
+                    (code (get r "ticket_id"))
+                    (esc (get r "jurisdiction"))))
+              (for [r (store/return-history db)]
+                (tr (pill "ok" "carpet returned")
+                    (code (get r "return_number"))
+                    (code (get r "ticket_id"))
+                    (esc (get r "jurisdiction")))))]
+    (section
+     "Registry records issued"
+     (str "Drafted by <code>carpetcare.registry</code> and numbered from a per-jurisdiction "
+          "sequence held by the store. Only ops that cleared the governor AND a human "
+          "approval reach this table.")
+     (if (seq rows)
+       (table ["Event" "Number" "Ticket" "Jurisdiction"] rows)
+       "    <p class=\"muted-text\">No registry records issued in this run.</p>\n"))))
+
+(defn- jurisdictions-section [db]
+  (let [in-use (jurisdictions-in-use db)
+        seeded (into (sorted-set) (keys facts/spec-basis-table))]
+    (section
+     "Jurisdiction spec-basis coverage"
+     (str (esc (facts/coverage-summary))
+          " Jurisdictions appearing on this run's tickets: "
+          (str/join ", " (map code in-use)) ".")
+     (table ["Jurisdiction" "Legal basis" "Consumer basis" "Required evidence" "On this run's tickets"]
+            (for [j (sort (into seeded in-use))]
+              (let [sb (facts/spec-basis j)]
+                (tr (code j)
+                    (if sb (esc (:legal-basis sb)) (pill "bad" "NO BASIS ON FILE"))
+                    (if sb (esc (:consumer-basis sb)) "—")
+                    (if sb (str (count (:required-evidence sb)) " records") "—")
+                    (if (contains? in-use j) (pill "ok" "yes") (pill "muted" "no")))))))))
+
+(defn- ledger-section [db]
+  (let [ledger (store/ledger db)]
+    (section
+     (str "Audit ledger — append-only (" (count ledger) " facts)")
+     (str "The complete decision-fact log this scenario produced. "
+          "\"Which rug was screened, which process was applied, which rug was handed "
+          "back, on what jurisdictional basis\" is always a query over an immutable log.")
+     (table ["#" "Fact" "Op" "Ticket" "Basis / rules"]
+            (map-indexed
+             (fn [i {:keys [t op subject basis]}]
+               (tr (str (inc i))
+                   (if (= :governor-hold t) (pill "bad" (nm t)) (pill "ok" (nm t)))
+                   (code op) (code subject)
+                   (if (seq basis)
+                     (str/join ", " (map #(esc (nm %)) basis))
+                     "—")))
+             ledger)))))
+
+;; ----------------------------- css -----------------------------
+
+(def ^:private dds-css
+  "Only the jp-go-dds (デジタル庁デザインシステム) primitives this page
+  actually references, transcribed from the local checkout
+  `orgs/kotoba-lang/jp-go-digital-design-system/resources/jp_go_dds/dds.css`
+  (MIT, Copyright (c) 2025 デジタル庁).
+
+  Inlined rather than pulled in as a git dependency on purpose: a git dep
+  would make this build network-dependent, and the library's own
+  `tokens/bridge-css` bridges a different token vocabulary than this page
+  uses, which silently unstyles it.
+
+  Note the semantic aliases are NOT a strong/weak pair --
+  `--color-semantic-error-1` is red-800 and `-2` is red-900, both dark.
+  Tint backgrounds therefore use the primitive `-50` steps."
+  "  :root {
+    --color-primitive-blue-100:#d9e6ff; --color-primitive-blue-900:#0017c1;
+    --color-primitive-green-50:#e6f5ec; --color-primitive-green-200:#9bd4b5;
+    --color-primitive-green-600:#259d63; --color-primitive-green-800:#197a4b;
+    --color-primitive-red-50:#fdeeee; --color-primitive-red-200:#ffbbbb;
+    --color-primitive-red-800:#ec0000; --color-primitive-red-900:#ce0000;
+    --color-primitive-yellow-50:#fbf5e0; --color-primitive-yellow-200:#ffe380;
+    --color-primitive-yellow-900:#927200;
+    --color-neutral-white:#ffffff;
+    --color-neutral-solid-gray-50:#f2f2f2; --color-neutral-solid-gray-100:#e6e6e6;
+    --color-neutral-solid-gray-200:#cccccc; --color-neutral-solid-gray-536:#767676;
+    --color-neutral-solid-gray-700:#4d4d4d; --color-neutral-solid-gray-800:#333333;
+    --color-neutral-solid-gray-900:#1a1a1a;
+    --font-family-sans:\"Noto Sans JP\",-apple-system,BlinkMacSystemFont,sans-serif;
+    --font-family-mono:\"Noto Sans Mono\",monospace;
+    /* semantic aliases, as upstream defines them */
+    --color-semantic-error-1:var(--color-primitive-red-800);
+    --color-semantic-error-2:var(--color-primitive-red-900);
+    --color-semantic-success-2:var(--color-primitive-green-800);
+  }
+")
+
+(def ^:private page-css
+  "  *{box-sizing:border-box}
+  body{margin:0;background:var(--color-neutral-solid-gray-50);
+       color:var(--color-neutral-solid-gray-900);
+       font-family:var(--font-family-sans);line-height:1.7;
+       -webkit-font-smoothing:antialiased}
+  header.bar{background:var(--color-primitive-blue-900);color:var(--color-neutral-white);
+             padding:28px 32px}
+  header.bar h1{margin:0 0 10px;font-size:1.45rem;line-height:1.4;font-weight:700}
+  header.bar .badge{display:inline-block;background:rgba(255,255,255,.14);
+                    border:1px solid rgba(255,255,255,.32);border-radius:4px;
+                    padding:5px 12px;font-size:.8rem}
+  header.bar .sub{margin:12px 0 0;font-size:.85rem;color:var(--color-primitive-blue-100)}
+  main{max-width:1180px;margin:0 auto;padding:28px 20px 64px}
+  section.card{background:var(--color-neutral-white);
+               border:1px solid var(--color-neutral-solid-gray-200);
+               border-radius:8px;padding:22px 24px;margin-bottom:22px}
+  section.card h2{margin:0 0 8px;font-size:1.1rem;font-weight:700;
+                  color:var(--color-primitive-blue-900)}
+  p.lede{margin:0 0 16px;font-size:.86rem;color:var(--color-neutral-solid-gray-700)}
+  table{width:100%;border-collapse:collapse;font-size:.82rem}
+  th,td{text-align:left;padding:8px 10px;
+        border-bottom:1px solid var(--color-neutral-solid-gray-100);
+        vertical-align:top}
+  th{background:var(--color-neutral-solid-gray-50);font-weight:700;
+     color:var(--color-neutral-solid-gray-800);white-space:nowrap}
+  tbody tr:last-child td{border-bottom:none}
+  code{font-family:var(--font-family-mono);font-size:.79rem;
+       background:var(--color-neutral-solid-gray-50);
+       border:1px solid var(--color-neutral-solid-gray-100);
+       border-radius:3px;padding:1px 5px;white-space:nowrap}
+  .pill{display:inline-block;border-radius:999px;padding:2px 10px;
+        font-size:.74rem;font-weight:700;white-space:nowrap}
+  .pill.ok{background:var(--color-primitive-green-50);
+           color:var(--color-semantic-success-2);
+           border:1px solid var(--color-primitive-green-200)}
+  .pill.bad{background:var(--color-primitive-red-50);
+            color:var(--color-semantic-error-2);
+            border:1px solid var(--color-primitive-red-200)}
+  .pill.warn{background:var(--color-primitive-yellow-50);
+             color:var(--color-primitive-yellow-900);
+             border:1px solid var(--color-primitive-yellow-200)}
+  .pill.muted{background:var(--color-neutral-solid-gray-50);
+              color:var(--color-neutral-solid-gray-536);
+              border:1px solid var(--color-neutral-solid-gray-200)}
+  .bad-text{color:var(--color-semantic-error-1)}
+  .ok-text{color:var(--color-semantic-success-2)}
+  .muted-text{color:var(--color-neutral-solid-gray-536);font-size:.78rem}
+  footer{max-width:1180px;margin:0 auto;padding:0 20px 48px;
+         font-size:.78rem;color:var(--color-neutral-solid-gray-536)}
+  footer code{background:var(--color-neutral-white)}
+")
+
+;; ----------------------------- document -----------------------------
+
+(defn render
+  "Renders the whole document from a store `db` and the run's `audit`
+  channel, both produced by `run-demo!`."
+  [{:keys [db audit]}]
+  (str
+   "<!doctype html>\n"
+   "<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
+   "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+   "<title>cloud-itonami-isic-9601-carpet · carpet &amp; rug cleaning operator console</title>\n"
+   "<style>\n" dds-css page-css "</style>\n</head>\n<body>\n"
+   "<header class=\"bar\">\n"
+   "  <h1>Carpet &amp; rug cleaning — Operator Console</h1>\n"
+   "  <span class=\"badge\">read-only sample · governor-gated · cleaning &amp; return ALWAYS human-approved</span>\n"
+   "  <p class=\"sub\">Generated at build time by <code>carpetcare.render-html</code> "
+   "(<code>clojure -M:dev:render-html</code>) by executing the real "
+   "<code>carpetcare.operation</code> StateGraph over <code>carpetcare.store/demo-data</code>. "
+   "No hand-written rows, no timestamps — reruns are byte-identical.</p>\n"
+   "</header>\n<main>\n"
+   (tickets-section db)
+   (rules-section db)
+   (holds-section db)
+   (attribution-section db audit)
+   (vocabulary-section)
+   (phases-section)
+   (registry-section db)
+   (jurisdictions-section db)
+   (ledger-section db)
+   "</main>\n"
+   "<footer>\n"
+   "  <p>This actor declares its own operating model — an off-premises intake, where the "
+   "rug is collected, cleaned and returned — and claims nothing beyond it. This workspace's "
+   "ISIC mirror does not enumerate carpet cleaning in any class; ISIC 9601's "
+   "&ldquo;washing, cleaning, dyeing and pressing of textile products&rdquo; is the reading "
+   "it operates under, not an authoritative self-classification. See "
+   "<code>docs/adr/0001-architecture.md</code>.</p>\n"
+   "</footer>\n</body>\n</html>\n"))
+
+;; ----------------------------- entry point -----------------------------
+
+(defn- verify!
+  "Build-time invariant. A run that holds nothing, or that fails to prove
+  a rule the scenario declared it would prove, must NOT be able to
+  publish a page. Throws rather than warning: a warning on stderr is
+  something a build log swallows."
+  [db]
+  (let [hs       (holds db)
+        fired    (fired-rules db)
+        expected (into (sorted-set) (keep :expect) scenario)
+        missing  (into (sorted-set) (remove fired) expected)]
+    (when (empty? hs)
+      (throw (ex-info "render aborted: the run produced ZERO :governor-hold records — a console that cannot show the governor refusing anything is not evidence that it works"
+                      {:holds 0 :expected-rules expected})))
+    (when (seq missing)
+      (throw (ex-info (str "render aborted: rules the scenario declared it would prove did not fire: "
+                           (str/join ", " (map name missing)))
+                      {:missing missing :fired fired :holds (count hs)})))
+    (when (< (count fired) 2)
+      (throw (ex-info "render aborted: fewer than two distinct hold reasons — rule variety floor not met"
+                      {:fired fired})))
+    {:holds (count hs) :rules fired}))
+
+(defn -main [& args]
+  (let [out (or (first args) "docs/samples/operator-console.html")
+        {:keys [db audit] :as result} (run-demo!)
+        {:keys [holds rules]} (verify! db)
+        html (render result)]
+    (spit out html)
+    (println "wrote" out
+             ;; chars, not bytes -- the page contains multi-byte Japanese
+             (str "(" (count html) " chars, "
+                  (count (store/ledger db)) " ledger facts, "
+                  holds " HARD holds over " (count rules) " distinct rules, "
+                  (count (approval-facts audit)) " human approvals, "
+                  (count (store/cleaning-history db)) " cleanings, "
+                  (count (store/return-history db)) " returns)"))))

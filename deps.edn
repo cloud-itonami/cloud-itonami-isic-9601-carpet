@@ -13,6 +13,12 @@
          {:local/root "../../kotoba-lang/langchain"}}}
   ;; clojure -M:dev:run  -> drive the demo through one OperationActor
   :run {:main-opts ["-m" "carpetcare.sim"]}
+  ;; clojure -M:dev:render-html [out-file] -> regenerate
+  ;; docs/samples/operator-console.html by executing the REAL actor
+  ;; stack. Offline and deterministic: the console's jp-go-dds
+  ;; primitives are inlined by the renderer, so no extra dependency and
+  ;; no network fetch is needed to build the page.
+  :render-html {:main-opts ["-m" "carpetcare.render-html"]}
   :test {:extra-paths ["test"]
          :extra-deps {io.github.cognitect-labs/test-runner
                       {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
