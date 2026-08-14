@@ -6,14 +6,7 @@
  ;; inside the monorepo checkout — a standalone fork should override
  ;; them with git coordinates.
  :deps {io.github.kotoba-lang/langgraph
-        {:local/root "../../kotoba-lang/langgraph"}
-        ;; jp-go-dds (デジタル庁デザインシステム) styles the generated
-        ;; operator console. :git/sha rather than :local/root -- the
-        ;; library resolves its own html/css deps from inside the git
-        ;; cache, where a relative :local/root would break.
-        io.github.kotoba-lang/jp-go-digital-design-system
-        {:git/url "https://github.com/kotoba-lang/jp-go-digital-design-system"
-         :git/sha "83db99546eabc53613ae826ea41d1533a3c574af"}}
+        {:local/root "../../kotoba-lang/langgraph"}}
  :aliases
  {:dev {:override-deps
         {io.github.kotoba-lang/langchain
@@ -21,7 +14,10 @@
   ;; clojure -M:dev:run  -> drive the demo through one OperationActor
   :run {:main-opts ["-m" "carpetcare.sim"]}
   ;; clojure -M:dev:render-html [out-file] -> regenerate
-  ;; docs/samples/operator-console.html through the real actor stack.
+  ;; docs/samples/operator-console.html by executing the REAL actor
+  ;; stack. Offline and deterministic: the console's jp-go-dds
+  ;; primitives are inlined by the renderer, so no extra dependency and
+  ;; no network fetch is needed to build the page.
   :render-html {:main-opts ["-m" "carpetcare.render-html"]}
   :test {:extra-paths ["test"]
          :extra-deps {io.github.cognitect-labs/test-runner

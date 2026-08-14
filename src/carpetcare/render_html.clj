@@ -1,31 +1,38 @@
 (ns carpetcare.render-html
   "Build-time HTML renderer for `docs/samples/operator-console.html`.
 
-  Closes flagship checklist item 2 for this repo: it had no demo page and
-  no generator at all. This namespace drives the REAL actor stack --
-  `carpetcare.operation` (a langgraph StateGraph) -> `carpetcare.governor`
-  -> `carpetcare.store` -- through a scenario extended from this repo's
-  own `carpetcare.sim` demo driver (`clojure -M:dev:run`, run BEFORE this
-  file was written to confirm the real seeded ticket ids `ticket-1`..
-  `ticket-5` and the real hold basis vectors).
+  Closes flagship checklist item 2: this repo previously had no demo page
+  and no generator. This namespace drives the REAL actor stack
+  (`carpetcare.operation` -> `carpetcare.governor` -> `carpetcare.store`,
+  compiled and executed as a langgraph StateGraph via
+  `langgraph.graph/run*`) over this repo's own seeded ticket set
+  (`carpetcare.store/demo-data`, ids `ticket-1`..`ticket-5`) and renders
+  the result.
 
-  **Nothing on the page is typed by hand.** Every ticket id, customer,
-  carpet description, fibre, weight, jurisdiction and hold reason is read
-  back out of `carpetcare.store/demo-data` or produced by a real
-  `carpetcare.governor/check` during this run. The reference tables
-  (fibre incompatibility, spec-basis, phase gate) are rendered from
-  `carpetcare.registry/fibre-forbidden-processes`,
-  `carpetcare.facts/spec-basis-table`, `carpetcare.phase/phases` and
-  `carpetcare.governor/high-stakes` rather than transcribed, so the page
-  cannot drift from the code it documents.
+  **Nothing on the page is hand-typed telemetry.** Ticket fields, hold
+  reasons, registry numbers, phase tables, jurisdiction coverage and the
+  approval-attribution audit are all read back out of the live store and
+  the live run's audit channel. The only hand-written strings are the
+  per-rule prose descriptions in `rule-catalogue`, which document the
+  governor's own rules; whether each rule actually FIRED in this run is
+  measured, never asserted.
 
-  Deterministic: no timestamps, no randomness, every map iteration
-  explicitly sorted, every float formatted under `Locale/ROOT`. Two runs
-  against the same seed are byte-identical.
+  ## Determinism
+
+  No timestamps, no randomness, no wall-clock, no locale-dependent
+  formatting (`fmt3` pins `Locale/ROOT`). Two consecutive runs against
+  the same seed are byte-identical.
+
+  ## Build-time invariant
+
+  `-main` THROWS unless the run actually produced HARD `:governor-hold`
+  records, and unless every rule the scenario declares it will prove was
+  in fact proven. A silent run that holds nothing must not be able to
+  publish a page claiming the governor works. (Precedent: isic-2513.)
 
   Usage: `clojure -M:dev:render-html [out-file]`
   (default `docs/samples/operator-console.html`)."
-  (:require [jp-go-dds.skin]
+  (:require [clojure.set :as set]
             [clojure.string :as str]
             [carpetcare.advisor :as advisor]
             [carpetcare.facts :as facts]
@@ -39,562 +46,609 @@
 (def ^:private operator
   {:actor-id "op-1" :actor-role :cleaning-supervisor :phase 3})
 
-;; ----------------------------- the rogue-advisor probe -----------------------------
+;; ----------------------------- the run -----------------------------
 
-(def ^:private smuggled-term
-  "One of the governor's OWN `scope-excluded-terms`, selected from that
-  vector rather than retyped here -- so if the table changes, this probe
-  follows it instead of silently testing a string nobody scans for."
-  (or (first (filter #(str/includes? % "鑑定") governor/scope-excluded-terms))
-      (first governor/scope-excluded-terms)))
+(defn- valuation-reaching-advisor
+  "A deliberately mis-behaving advisor, injected through
+  `carpetcare.operation/build`'s documented `:advisor` seam.
 
-(defn- rogue-advisor
-  "The repo's own mock advisor with one scope-excluded term spliced into
-  its `:rationale`, injected through `operation/build`'s documented
-  `:advisor` seam. This is the only way to reach the governor's
-  `:scope-excluded` check, which exists precisely because a real LLM
-  advisor can describe a permanently out-of-scope decision in prose while
-  proposing an otherwise-legitimate op. The op, the ticket and the
-  resulting hold are all real; only the advisor is swapped."
+  It drafts an otherwise well-formed `:careplan/verify` proposal -- valid
+  citations, high confidence -- and then reaches, in its own prose, for a
+  decision this actor has no op for: appraising the rug's value.
+
+  This is the exact situation `carpetcare.governor`'s scope-exclusion
+  check exists for (see that namespace's docstring: \"If a real LLM
+  advisor describes one in prose, the governor's scope-exclusion check
+  catches it on the way through\"). The honest `mock-advisor` can never
+  reach that rule, so exercising it needs an advisor that tries. The
+  governor censoring it is real; only the advisor is adversarial."
   []
   (reify advisor/Advisor
     (-advise [_ st request]
       (let [p (advisor/infer st request)]
-        (update p :rationale str "　顧客には" smuggled-term "を提示済み。")))))
+        (assoc p :rationale
+               (str (:rationale p)
+                    " なお本件は市場相場に照らした appraised value を "
+                    "併せて確定し、以後の賠償上限として扱う。"))))))
 
-;; ----------------------------- the scenario -----------------------------
+(def ^:private scenario
+  "The scenario as DATA, so each step can declare what it intends to
+  prove and the build can verify it afterwards.
+
+  `:expect` is the governor rule this step exists to demonstrate; `nil`
+  means the step is expected to clear the governor (and, for every write
+  op at phase 3 except `:ticket/intake`, to escalate to a human).
+
+  Ordering matters and is load-bearing: `ticket-1` attempts its cleaning
+  BEFORE its care plan is verified (isolating `:evidence-incomplete`),
+  and attempts it again AFTER it has been cleaned (isolating
+  `:already-cleaned`)."
+  [{:tid "t1-intake"  :approve? false :expect nil
+    :note "phase-3 auto-commit: intake is the only op any phase may auto-commit"
+    :request {:op :ticket/intake :subject "ticket-1"
+              :patch {:id "ticket-1" :customer "Sakura Tanaka"}}}
+
+   {:tid "t1-early-clean" :approve? false :expect :evidence-incomplete
+    :note "cleaning attempted before the care plan exists"
+    :request {:op :actuation/apply-cleaning-process :subject "ticket-1"}}
+
+   {:tid "t1-careplan" :approve? true :expect nil
+    :note "JPN spec-basis on file; escalates for approval"
+    :request {:op :careplan/verify :subject "ticket-1"}}
+
+   {:tid "t1-fibre" :approve? true :expect nil
+    :note "colourfastness confirmed; escalates for approval"
+    :request {:op :fibre/screen :subject "ticket-1"}}
+
+   {:tid "t1-clean" :approve? true :expect nil
+    :note "ALWAYS human-approved; never auto at any phase"
+    :request {:op :actuation/apply-cleaning-process :subject "ticket-1"}}
+
+   {:tid "t1-return" :approve? true :expect nil
+    :note "ALWAYS human-approved; bailment -- possession returns, title never moved"
+    :request {:op :actuation/return-carpet :subject "ticket-1"}}
+
+   {:tid "t1-reclean" :approve? false :expect :already-cleaned
+    :note "double-actuation guard off a dedicated boolean, not a :status"
+    :request {:op :actuation/apply-cleaning-process :subject "ticket-1"}}
+
+   {:tid "t1-rereturn" :approve? false :expect :already-returned
+    :note "second return of the same rug"
+    :request {:op :actuation/return-carpet :subject "ticket-1"}}
+
+   {:tid "t2-careplan" :approve? false :expect :no-spec-basis
+    :note "jurisdiction ATL has no textile/consumer basis on file"
+    :request {:op :careplan/verify :subject "ticket-2"}}
+
+   {:tid "t3-careplan" :approve? true :expect nil
+    :note "ticket-3's own care plan clears, so the next hold is isolated"
+    :request {:op :careplan/verify :subject "ticket-3"}}
+
+   {:tid "t3-clean" :approve? false :expect :cleaning-process-forbidden-by-fibre
+    :note "alkaline detergent on a hand-knotted wool rug -- felts and yellows irreversibly"
+    :request {:op :actuation/apply-cleaning-process :subject "ticket-3"}}
+
+   {:tid "t4-fibre" :approve? false :expect :colourfastness-not-confirmed
+    :note "naturally-dyed kilim; the screening holds on its own finding"
+    :request {:op :fibre/screen :subject "ticket-4"}}
+
+   {:tid "t5-careplan" :approve? true :expect nil
+    :note "ticket-5's own care plan clears, so the next hold is isolated"
+    :request {:op :careplan/verify :subject "ticket-5"}}
+
+   {:tid "t5-clean" :approve? false :expect :moisture-claim-mismatch
+    :note "claimed 0.05 vs (5200-4000)/4000 recomputed from its own weights"
+    :request {:op :actuation/apply-cleaning-process :subject "ticket-5"}}
+
+   {:tid "x-vocab" :approve? false :expect :op-not-allowed
+    :note "an op outside the closed five-op vocabulary"
+    :request {:op :actuation/appraise-value :subject "ticket-1"}}
+
+   {:tid "x-scope" :approve? false :expect :scope-excluded :adversarial? true
+    :note "advisor prose reaching for a permanently out-of-scope valuation"
+    :request {:op :careplan/verify :subject "ticket-1"}}])
 
 (defn run-demo!
-  "Runs a freshly seeded store through every disposition this actor can
-  reach, and returns `{:db store :audit [facts]}`.
-
-  Committed path -- `ticket-1` (JPN, synthetic, colourfastness confirmed,
-  claimed moisture agreeing with its own weights) clears the whole
-  lifecycle: intake auto-commits at phase 3 (a recording act, no capital
-  risk), then care-plan verification, fibre/colourfastness screening, the
-  cleaning application and the carpet return each escalate to a human and
-  are approved. The two actuations escalate at phase 3 by construction --
-  they are absent from every phase's `:auto` set AND members of
-  `governor/high-stakes`, two independent layers saying the same thing.
-
-  HARD holds -- one per governor rule, each on the seeded ticket built to
-  reach it:
-
-    ticket-2  `:no-spec-basis`                       (jurisdiction \"ATL\")
-    ticket-3  `:cleaning-process-forbidden-by-fibre` (alkaline on wool)
-    ticket-4  `:colourfastness-not-confirmed`        (naturally-dyed kilim)
-    ticket-5  `:moisture-claim-mismatch`             (0.05 claimed vs 0.30)
-    ticket-3  `:evidence-incomplete`                 (no care plan on file)
-    ticket-1  `:already-cleaned` / `:already-returned` (double actuation)
-    ticket-1  `:op-not-allowed`                      (op outside the vocabulary)
-    ticket-1  `:scope-excluded`                      (rogue advisor, above)
-
-  And one human REJECTION -- `ticket-3`'s care plan is governor-clean and
-  escalates, and the approver declines. That is a `:approval-rejected`
-  fact, deliberately NOT counted as a governor hard hold: a human said no,
-  the machine did not."
+  "Executes `scenario` against a freshly seeded store through the real
+  compiled graph. Returns `{:db .. :audit .. :steps ..}` where `:audit`
+  is the concatenated per-thread audit channel (last state per thread,
+  in first-execution order) and `:steps` is the scenario annotated with
+  what each step actually produced."
   []
-  (let [db (store/seed-db)
-        actor (op/build db)
-        rogue (op/build db {:advisor (rogue-advisor)})
-        order (atom [])
-        audits (atom {})
-        keep! (fn [tid r]
-                (when-not (some #{tid} @order) (swap! order conj tid))
-                ;; a resumed run returns its thread's CUMULATIVE audit, so
-                ;; the last write for a thread-id is the whole story --
-                ;; assoc, never conj, or approvals would be double-counted.
-                (swap! audits assoc tid (vec (:audit (:state r))))
-                r)
-        exec! (fn [a tid request]
-                (keep! tid (g/run* a {:request request :context operator}
-                                   {:thread-id tid})))
-        resume! (fn [tid approval]
-                  (keep! tid (g/run* actor {:approval approval}
-                                     {:thread-id tid :resume? true})))
-        approve! (fn [tid] (resume! tid {:status :approved :by "op-1"}))
-        reject! (fn [tid] (resume! tid {:status :rejected :by "op-1"}))]
+  (let [db        (store/seed-db)
+        honest    (op/build db)
+        adversary (op/build db {:advisor (valuation-reaching-advisor)})
+        audits    (atom [])
+        record!   (fn [tid res]
+                    (swap! audits conj {:tid tid
+                                        :audit (vec (get-in res [:state :audit]))})
+                    res)]
+    (doseq [{:keys [tid request approve? adversarial?]} scenario]
+      (let [actor (if adversarial? adversary honest)]
+        (record! tid (g/run* actor {:request request :context operator}
+                             {:thread-id tid}))
+        (when approve?
+          (record! tid (g/run* actor {:approval {:status :approved :by "op-1"}}
+                               {:thread-id tid :resume? true})))))
+    ;; Collapse to the FINAL audit per thread (a resumed run replays the
+    ;; checkpointed audit, so keeping both copies would double-count),
+    ;; preserving first-execution order.
+    (let [entries @audits
+          order   (distinct (map :tid entries))
+          by-tid  (reduce (fn [m e] (assoc m (:tid e) (:audit e))) {} entries)]
+      {:db    db
+       :steps scenario
+       :audit (vec (mapcat by-tid order))})))
 
-    ;; --- ticket-1: the full committed lifecycle ---
-    (exec! actor "t1-intake" {:op :ticket/intake :subject "ticket-1"
-                              :patch {:id "ticket-1" :customer "Sakura Tanaka"}})
+;; ----------------------------- derivations -----------------------------
 
-    (exec! actor "t1-careplan" {:op :careplan/verify :subject "ticket-1"})
-    (approve! "t1-careplan")
+(defn- holds
+  "Every HARD hold this run actually wrote to the append-only ledger."
+  [db]
+  (filterv #(= :governor-hold (:t %)) (store/ledger db)))
 
-    (exec! actor "t1-fibre" {:op :fibre/screen :subject "ticket-1"})
-    (approve! "t1-fibre")
+(defn- fired-rules [db]
+  (into #{} (mapcat :basis) (holds db)))
 
-    (exec! actor "t1-clean" {:op :actuation/apply-cleaning-process :subject "ticket-1"})
-    (approve! "t1-clean")
+(def ^:private rule-catalogue
+  "Every rule `carpetcare.governor` implements, with the reason it cannot
+  be argued down. The prose documents the rule; the `fired?` column on
+  the page is measured from the run, not from this table."
+  [[:op-not-allowed
+    "提案 op が閉じた語彙の外 -- 構成上のスコープ違反"]
+   [:no-spec-basis
+    "法域に繊維表示/消費者保護の公式基準が無い -- 推測で要件を作らない"]
+   [:evidence-incomplete
+    "法域の必要書類（顧客同意/受取時状態/繊維鑑別/洗浄工程）が未充足"]
+   [:colourfastness-not-confirmed
+    "色堅牢度が未確認のまま湿式工程へ -- HARD、上書き不可"]
+   [:cleaning-process-forbidden-by-fibre
+    "台帳の繊維と提案工程から再計算した禁止組合せ -- 集合の所属で、下げられる閾値は無い"]
+   [:moisture-claim-mismatch
+    "申告残留水分率 ≠ 自身の乾湿重量から再計算した値 -- 推定ではなく恒等式"]
+   [:already-cleaned
+    "二重作動ガード（専用 boolean であって :status 値ではない）"]
+   [:already-returned
+    "同じ敷物の二度目の返却"]
+   [:scope-excluded
+    "恒久的にスコープ外の判断（賠償責任・鑑定価格・ISIC 自己認定）に触れる文言"]])
 
-    (exec! actor "t1-return" {:op :actuation/return-carpet :subject "ticket-1"})
-    (approve! "t1-return")
+(defn- approval-facts
+  "`:approval-granted` facts from the live run's audit channel."
+  [audit]
+  (filterv #(= :approval-granted (:t %)) audit))
 
-    ;; --- HARD holds, one per governor rule ---
-    (exec! actor "h-no-spec-basis" {:op :careplan/verify :subject "ticket-2"})
-    (exec! actor "h-fibre-forbidden" {:op :actuation/apply-cleaning-process :subject "ticket-3"})
-    (exec! actor "h-colourfastness" {:op :fibre/screen :subject "ticket-4"})
-    (exec! actor "h-moisture" {:op :actuation/apply-cleaning-process :subject "ticket-5"})
-    (exec! actor "h-evidence" {:op :actuation/return-carpet :subject "ticket-3"})
-    (exec! actor "h-op-not-allowed" {:op :actuation/appraise-value :subject "ticket-1"})
-    (exec! actor "h-already-cleaned" {:op :actuation/apply-cleaning-process :subject "ticket-1"})
-    (exec! actor "h-already-returned" {:op :actuation/return-carpet :subject "ticket-1"})
-    (exec! rogue "h-scope-excluded" {:op :careplan/verify :subject "ticket-1"})
+(defn- approver-in-commit-record
+  "DERIVED, not hardcoded: walk the register this op's effect actually
+  writes to and report whether an approver key survived into the
+  committed SSoT record.
 
-    ;; --- a human declining a governor-clean proposal ---
-    (exec! actor "r-rejected" {:op :careplan/verify :subject "ticket-3"})
-    (reject! "r-rejected")
-
-    {:db db
-     :audit (vec (mapcat #(get @audits %) @order))}))
-
-;; ----------------------------- derived readings -----------------------------
-
-(defn hard-holds
-  "The un-overridable governor holds in this ledger. A `:governor-hold`
-  with an empty basis would be a phase gate, not a rule violation, and an
-  `:approval-rejected` is a human decision -- neither is counted."
-  [ledger]
-  (vec (filter #(and (= :governor-hold (:t %)) (seq (:basis %))) ledger)))
-
-(defn- approver-in
-  "Any approver recorded on a committed artefact, or nil.
-
-  Derived rather than hard-coded to `:approved-by`: ANY key whose name
-  contains \"approv\" counts, keyword or string. So if the store is later
-  fixed to persist `:approver`, `\"approved_by\"` or `:approved-by`, this
-  page reports the name instead of the gap, with no edit here."
-  [record]
-  (when (map? record)
-    (some (fn [k]
-            (when (str/includes? (str/lower-case (if (keyword? k) (name k) (str k)))
-                                 "approv")
-              (some-> (get record k) str)))
-          (sort-by str (keys record)))))
-
-(defn- ssot-record-for
-  "The SSoT artefact a committed op actually wrote, read back through the
-  `Store` protocol -- not the record the graph handed to the store."
-  [db op subject]
+  This is deliberately a live lookup rather than a constant, so that if
+  `carpetcare.store/commit-record!` is later changed to carry `:payload`
+  through the two actuation effects, this page starts saying so on its
+  own instead of continuing to publish a stale claim."
+  [db {:keys [op subject]}]
   (case op
-    :ticket/intake (store/ticket db subject)
-    :careplan/verify (store/careplan-of db subject)
-    :fibre/screen (store/fibre-screening-of db subject)
+    :careplan/verify (:approved-by (store/careplan-of db subject))
+    :fibre/screen    (:approved-by (store/fibre-screening-of db subject))
     :actuation/apply-cleaning-process
-    (first (filter #(= subject (get % "ticket_id")) (store/cleaning-history db)))
+    (or (:approved-by (store/ticket db subject))
+        (some #(get % "approved_by")
+              (filter #(= subject (get % "ticket_id")) (store/cleaning-history db))))
     :actuation/return-carpet
-    (first (filter #(= subject (get % "ticket_id")) (store/return-history db)))
+    (or (:approved-by (store/ticket db subject))
+        (some #(get % "approved_by")
+              (filter #(= subject (get % "ticket_id")) (store/return-history db))))
     nil))
 
-(defn approval-trail
-  "One reading per committed ledger fact: was a human asked, did they
-  approve, and did that approver survive into the SSoT and the ledger?
-
-  `:route` distinguishes an auto-commit (nobody was asked, so nobody is
-  missing) from an approved commit (somebody was asked and named), which
-  is what makes a dropped approver legible as a defect rather than as an
-  absence of approval."
-  [{:keys [db audit]}]
-  (let [ledger (vec (store/ledger db))
-        granted (filter #(= :approval-granted (:t %)) audit)
-        requested (filter #(= :approval-requested (:t %)) audit)
-        by-key (fn [coll] (into {} (map (juxt (juxt :op :subject) identity) coll)))
-        granted-idx (by-key granted)
-        requested-idx (by-key requested)]
-    (vec
-     (for [{:keys [op subject] :as f} (filter #(= :committed (:t %)) ledger)]
-       (let [k [op subject]
-             g-fact (get granted-idx k)
-             asked? (contains? requested-idx k)
-             record (ssot-record-for db op subject)]
-         {:op op
-          :subject subject
-          :route (cond g-fact :approved
-                       asked? :requested-not-granted
-                       :else :auto-commit)
-          :approver-in-run (:by g-fact)
-          :approver-in-ssot (approver-in record)
-          :approver-in-ledger (approver-in f)
-          :record-shape (when (map? record)
-                          (str/join ", " (sort (map #(if (keyword? %) (str %) (str "\"" % "\""))
-                                                    (keys record)))))})))))
-
-(defn- approver-gaps
-  "Approved commits whose approver reached neither the SSoT record nor
-  the ledger fact. Derived every run: this is empty the day the store
-  keeps the approver, and the page's disclosure disappears with it."
-  [trail]
-  (vec (filter #(and (= :approved (:route %))
-                     (nil? (:approver-in-ssot %))
-                     (nil? (:approver-in-ledger %)))
-               trail)))
+(defn- jurisdictions-in-use [db]
+  (into (sorted-set) (keep :jurisdiction (store/all-tickets db))))
 
 ;; ----------------------------- html helpers -----------------------------
 
 (defn- esc [v]
-  (-> (str v)
+  (-> (if (nil? v) "" (str v))
       (str/replace "&" "&amp;")
       (str/replace "<" "&lt;")
-      (str/replace ">" "&gt;")))
+      (str/replace ">" "&gt;")
+      (str/replace "\"" "&quot;")))
 
-(defn- span [cls content] (str "<span class=\"" cls "\">" content "</span>"))
-(defn- code [v] (str "<code>" (esc v) "</code>"))
-(defn- row [& cells] (str "        <tr>" (str/join (map #(str "<td>" % "</td>") cells)) "</tr>"))
-(defn- rows [xs] (str/join "\n" xs))
+(defn- nm [v] (if (keyword? v) (name v) (str v)))
 
-(defn- fmt-rate
-  "Locale-independent fixed-point rendering -- `clojure.core/format` would
-  emit a comma decimal separator under a European default locale, which
-  would make this page's bytes depend on the machine that built it."
+(defn- fmt3
+  "Locale-pinned so the page is byte-identical on a machine whose default
+  locale uses a decimal comma."
   [x]
-  (when (number? x)
-    (String/format java.util.Locale/ROOT "%.4f" (into-array Object [(double x)]))))
+  (if (number? x)
+    (String/format java.util.Locale/ROOT "%.3f" (into-array Object [(double x)]))
+    "—"))
 
-(defn- table [headers body-rows]
+(defn- code [v] (str "<code>" (esc (nm v)) "</code>"))
+
+(defn- pill [cls label] (str "<span class=\"pill " cls "\">" (esc label) "</span>"))
+
+(defn- tr [& cells] (str "        <tr>" (str/join (map #(str "<td>" % "</td>") cells)) "</tr>"))
+
+(defn- table [headers rows]
   (str "    <table>\n"
-       "      <thead><tr>" (str/join (map #(str "<th>" % "</th>") headers)) "</tr></thead>\n"
-       "      <tbody>\n" body-rows "\n      </tbody>\n"
+       "      <thead><tr>"
+       (str/join (map #(str "<th>" (esc %) "</th>") headers))
+       "</tr></thead>\n"
+       "      <tbody>\n"
+       (str/join "\n" rows) "\n"
+       "      </tbody>\n"
        "    </table>\n"))
 
 (defn- section [title lede body]
   (str "  <section class=\"card\">\n"
-       "    <h2>" title "</h2>\n"
-       "    <p class=\"muted\">" lede "</p>\n"
+       "    <h2>" (esc title) "</h2>\n"
+       "    <p class=\"lede\">" lede "</p>\n"
        body
        "  </section>\n"))
 
 ;; ----------------------------- sections -----------------------------
 
 (defn- last-fact-for [ledger id]
-  (last (filter #(= id (:subject %)) ledger)))
+  (last (filter #(= (:subject %) id) ledger)))
 
 (defn- status-cell [ledger id]
   (let [f (last-fact-for ledger id)]
-    (case (:t f)
-      :committed (span "ok" "committed")
-      :approval-rejected (span "warn" "held &middot; approver declined")
-      :governor-hold (span "critical"
-                           (str "HARD hold &middot; "
-                                (esc (str/join ", " (map name (:basis f))))))
-      :approval-requested (span "warn" "awaiting approval")
-      (span "muted" "no activity"))))
+    (cond
+      (nil? f) (pill "muted" "no activity")
+      (= :committed (:t f)) (pill "ok" "committed")
+      (= :governor-hold (:t f))
+      (pill "bad" (str "HARD hold · " (str/join ", " (map nm (:basis f)))))
+      :else (pill "muted" (nm (:t f))))))
 
 (defn- lifecycle-cell [{:keys [cleaning-applied? carpet-returned?]}]
-  (cond carpet-returned? (span "ok" "cleaned &amp; returned")
-        cleaning-applied? (span "warn" "cleaned, not yet returned")
-        :else (span "muted" "in intake")))
+  (cond
+    carpet-returned?  (pill "ok" "cleaned & returned")
+    cleaning-applied? (pill "warn" "cleaned, not yet returned")
+    :else             (pill "muted" "in intake")))
 
-(defn- tickets-section [db ledger]
-  (section
-   "Care tickets (seeded bailment ledger)"
-   (str "Every row is read back out of <code>carpetcare.store</code> after the run &mdash; "
-        "the identifying fields are this repo's own seed data, the lifecycle and status "
-        "columns are what the real governor and store did with them.")
-   (table ["Ticket" "Customer" "Carpet" "Fibre" "Proposed process" "Jurisdiction"
-           "Lifecycle" "Last decision"]
-          (rows (for [{:keys [id customer carpet fibre proposed-cleaning-process
-                              jurisdiction] :as t} (store/all-tickets db)]
-                  (row (code id) (esc customer) (esc carpet) (code fibre)
-                       (code proposed-cleaning-process)
-                       (str (code jurisdiction) " "
-                            (if (facts/covered? jurisdiction)
-                              (span "ok" "basis on file")
-                              (span "critical" "no basis on file")))
-                       (lifecycle-cell t)
-                       (status-cell ledger id)))))))
-
-(defn- fibre-table-section []
-  (section
-   "Fibre &times; process incompatibility"
-   (str "Rendered from <code>carpetcare.registry/fibre-forbidden-processes</code>, not "
-        "transcribed. Set membership, so there is no threshold to lower: wool felts and "
-        "yellows irreversibly in alkali, silk loses its hand and its dye to oxygen bleach, "
-        "natural dyes bleed, and a jute secondary backing browns when over-wetted.")
-   (table ["Recorded fibre" "Forbidden processes"]
-          (rows (for [[fibre banned] (sort-by (comp name key) registry/fibre-forbidden-processes)]
-                  (row (code fibre)
-                       (if (seq banned)
-                         (str/join " " (map code (sort-by name banned)))
-                         (span "muted" "none"))))))))
-
-(defn- fibre-recompute-section [db]
-  (section
-   "Independent recompute &mdash; fibre gate"
-   (str "The governor never asks the advisor whether a process is safe. It recomputes the "
-        "answer from two permanent ground-truth fields already on the ticket "
-        "(<code>:fibre</code>, <code>:proposed-cleaning-process</code>) via "
-        "<code>registry/cleaning-process-forbidden-by-fibre?</code>, which is re-run here "
-        "per ticket at render time.")
-   (table ["Ticket" "Fibre" "Proposed process" "Forbidden set for this fibre" "Verdict"]
-          (rows (for [{:keys [id fibre proposed-cleaning-process] :as t} (store/all-tickets db)]
-                  (let [banned (sort-by name (get registry/fibre-forbidden-processes fibre #{}))]
-                    (row (code id) (code fibre) (code proposed-cleaning-process)
-                         (if (seq banned)
-                           (str/join " " (map code banned))
-                           (span "muted" "none"))
-                         (if (registry/cleaning-process-forbidden-by-fibre? t)
-                           (span "critical" "FORBIDDEN &middot; hard hold")
-                           (span "ok" "compatible")))))))))
-
-(defn- moisture-section [db]
-  (section
-   "Independent recompute &mdash; residual-moisture identity"
-   (str "<code>(wet &minus; dry) / dry</code> recomputed from the ticket's own weights and "
-        "compared with the rate it claims. An identity, not an estimate &mdash; the 0.005 "
-        "tolerance is on the float comparison, not on the rule. Over-wetting is what causes "
-        "mould and cellulosic browning, so this is the number a dispute turns on.")
-   (table ["Ticket" "Dry (g)" "Wet (g)" "Claimed rate" "Recomputed rate" "Verdict"]
-          (rows (for [{:keys [id dry-weight-g wet-weight-g claimed-residual-moisture]
-                       :as t} (store/all-tickets db)]
-                  (row (code id)
-                       (str "<span class=\"num\">" (esc dry-weight-g) "</span>")
-                       (str "<span class=\"num\">" (esc wet-weight-g) "</span>")
-                       (str "<span class=\"num\">" (esc (fmt-rate claimed-residual-moisture)) "</span>")
-                       (str "<span class=\"num\">"
-                            (esc (or (fmt-rate (registry/residual-moisture-rate t)) "n/a"))
-                            "</span>")
-                       (if (registry/moisture-claim-mismatch? t)
-                         (span "critical" "MISMATCH &middot; hard hold")
-                         (span "ok" "agrees"))))))))
-
-(defn- spec-basis-section [db]
-  (let [seeded (sort (distinct (map :jurisdiction (store/all-tickets db))))]
+(defn- tickets-section [db]
+  (let [ledger (store/ledger db)]
     (section
-     "Jurisdictional spec-basis"
+     "Care tickets (SSoT)"
+     (str "Every column is read back out of <code>carpetcare.store</code> after the run. "
+          "<em>Recomputed moisture</em> is <code>carpetcare.registry/residual-moisture-rate</code> "
+          "evaluated on the ticket's own dry/wet weights — the operator's claim is never trusted.")
+     (table ["Ticket" "Customer" "Carpet" "Fibre" "Proposed process" "Juris."
+             "Claimed moisture" "Recomputed" "Lifecycle" "Last decision"]
+            (for [{:keys [id customer carpet fibre proposed-cleaning-process
+                          jurisdiction claimed-residual-moisture] :as t}
+                  (store/all-tickets db)]
+              (tr (code id) (esc customer) (esc carpet) (code fibre)
+                  (code proposed-cleaning-process)
+                  (esc jurisdiction)
+                  (fmt3 claimed-residual-moisture)
+                  (let [actual (registry/residual-moisture-rate t)]
+                    (if (registry/moisture-claim-mismatch? t)
+                      (str "<strong class=\"bad-text\">" (fmt3 actual) "</strong>")
+                      (fmt3 actual)))
+                  (lifecycle-cell t)
+                  (status-cell ledger id)))))))
+
+(defn- vocabulary-section []
+  (section
+   "Op vocabulary (closed)"
+   (str "The whole vocabulary is " (count governor/allowed-ops)
+        " ops. <strong>No op settles a damage-liability decision, appraises the rug's "
+        "value, or declares its own ISIC classification authoritative</strong> — those "
+        "are absent from the vocabulary, not merely gated. High-stakes membership is a "
+        "set of <em>ops</em>, never the advisor's own self-reported <code>:stake</code>.")
+   (table ["Op" "High-stakes" "Auto-committable at any phase"]
+          (for [o (sort-by nm governor/allowed-ops)]
+            (tr (code o)
+                (if (contains? governor/high-stakes o)
+                  (pill "warn" "ALWAYS human approval")
+                  (pill "muted" "no"))
+                (if (contains? (phase/auto-eligible-ops) o)
+                  (pill "ok" "yes — phase 3")
+                  (pill "muted" "never")))))))
+
+(defn- phases-section []
+  (let [overlap (set/intersection (phase/auto-eligible-ops) governor/high-stakes)]
+    (section
+     "Rollout phases"
+     (str "Read out of <code>carpetcare.phase/phases</code>. Derived check: the "
+          "high-stakes actuations appearing in any phase's auto set = "
+          (if (empty? overlap)
+            "<strong class=\"ok-text\">none</strong> — the permanent invariant holds"
+            (str "<strong class=\"bad-text\">" (esc (pr-str overlap)) "</strong>"))
+          ". Two layers assert it independently (<code>phase</code> and "
+          "<code>governor/high-stakes</code>).")
+     (table ["Phase" "Label" "May write" "May auto-commit"]
+            (for [[n {:keys [label writes auto]}] (sort-by key phase/phases)]
+              (tr (str n) (esc label)
+                  (if (seq writes)
+                    (str/join " " (map code (sort-by nm writes)))
+                    (pill "muted" "nothing"))
+                  (if (seq auto)
+                    (str/join " " (map code (sort-by nm auto)))
+                    (pill "muted" "nothing"))))))))
+
+(defn- rules-section [db]
+  (let [fired (fired-rules db)]
+    (section
+     "Governor rules — coverage measured in this run"
+     (str "All " (count rule-catalogue) " rules <code>carpetcare.governor</code> "
+          "implements. The <em>Exercised</em> column is measured from the ledger this "
+          "run produced, not asserted: a rule shown as exercised really did stop a real "
+          "proposal below. The build fails if a rule the scenario claims to prove did not fire.")
+     (table ["Rule" "Why it cannot be argued down" "Exercised" "On"]
+            (for [[rule why] rule-catalogue]
+              (let [hit (filter #(some #{rule} (:basis %)) (holds db))]
+                (tr (code rule) (esc why)
+                    (if (contains? fired rule)
+                      (pill "ok" "yes")
+                      (pill "muted" "not in this scenario"))
+                    (if (seq hit)
+                      (str/join ", " (distinct (map #(code (:subject %)) hit)))
+                      "—"))))))))
+
+(defn- holds-section [db]
+  (let [hs (holds db)]
+    (section
+     (str "HARD holds this run (" (count hs) ")")
+     (str "Each row is a real <code>:governor-hold</code> fact from the append-only "
+          "ledger. A HARD hold is never escalated to a human — it does not reach the "
+          "approval queue at all, so there is no one to talk out of it.")
+     (table ["Op" "Ticket" "Rules" "Governor's own detail"]
+            (for [h hs]
+              (tr (code (:op h)) (code (:subject h))
+                  (str/join " " (map #(pill "bad" (nm %)) (:basis h)))
+                  (str/join "<br>" (map #(esc (:detail %)) (:violations h)))))))))
+
+(defn- attribution-section [db audit]
+  (let [granted (approval-facts audit)]
+    (section
+     "Approval attribution — measured, not assumed"
+     (str "Every high-stakes act here is human-approved, so <em>who approved it</em> is "
+          "part of the evidence a dispute turns on. This section walks each register the "
+          "commit actually wrote to and reports whether the approver survived. "
+          "<strong>Measured on this store</strong>: "
+          "<code>:careplan/set</code> and <code>:fibre-screening/set</code> persist the "
+          "proposal <code>:payload</code> (so the approver survives), while "
+          "<code>:ticket/mark-cleaned</code> and <code>:ticket/mark-returned</code> are "
+          "keyed off <code>path</code> only and drop it. Separately, the "
+          "<code>:approval-granted</code> fact is written to the run's audit channel but "
+          "never appended to the store ledger, so for the two actuations the approver is "
+          "recoverable <em>only</em> from the audit trail. The lookup below is derived at "
+          "render time — if the store is fixed, this page corrects itself.")
+     (table ["Op" "Ticket" "Approver (audit trail)" "Approver in commit record"]
+            (for [{:keys [op subject by]} granted]
+              (let [in-store (approver-in-commit-record db {:op op :subject subject})]
+                (tr (code op) (code subject)
+                    (esc by)
+                    (if in-store
+                      (str (pill "ok" "persisted") " " (esc in-store))
+                      (str (pill "warn" "not persisted")
+                           " <span class=\"muted-text\">(audit only — not in commit record)</span>")))))))))
+
+(defn- registry-section [db]
+  (let [rows (concat
+              (for [r (store/cleaning-history db)]
+                (tr (pill "ok" "cleaning applied")
+                    (code (get r "cleaning_number"))
+                    (code (get r "ticket_id"))
+                    (esc (get r "jurisdiction"))))
+              (for [r (store/return-history db)]
+                (tr (pill "ok" "carpet returned")
+                    (code (get r "return_number"))
+                    (code (get r "ticket_id"))
+                    (esc (get r "jurisdiction")))))]
+    (section
+     "Registry records issued"
+     (str "Drafted by <code>carpetcare.registry</code> and numbered from a per-jurisdiction "
+          "sequence held by the store. Only ops that cleared the governor AND a human "
+          "approval reach this table.")
+     (if (seq rows)
+       (table ["Event" "Number" "Ticket" "Jurisdiction"] rows)
+       "    <p class=\"muted-text\">No registry records issued in this run.</p>\n"))))
+
+(defn- jurisdictions-section [db]
+  (let [in-use (jurisdictions-in-use db)
+        seeded (into (sorted-set) (keys facts/spec-basis-table))]
+    (section
+     "Jurisdiction spec-basis coverage"
      (str (esc (facts/coverage-summary))
-          " Rendered from <code>carpetcare.facts/spec-basis-table</code>; the seeded-tickets "
-          "column is recomputed with <code>facts/covered?</code>.")
-     (str
-      (table ["ISO3" "Jurisdiction" "Legal basis" "Consumer basis" "Provenance" "Required records"]
-             (rows (for [[iso3 {:keys [name legal-basis consumer-basis provenance
-                                       required-evidence]}]
-                         (sort-by key facts/spec-basis-table)]
-                     (row (code iso3) (esc name) (esc legal-basis) (esc consumer-basis)
-                          (esc provenance)
-                          (str/join "<br>" (map esc required-evidence))))))
-      "    <h3>Jurisdictions appearing on seeded tickets</h3>\n"
-      (table ["Jurisdiction" "Tickets" "Basis on file"]
-             (rows (for [j seeded]
-                     (row (code j)
-                          (str/join " " (map (comp code :id)
-                                             (filter #(= j (:jurisdiction %))
-                                                     (store/all-tickets db))))
-                          (if (facts/covered? j)
-                            (span "ok" "yes")
-                            (span "critical" "NO &mdash; every proposal touching it is held"))))))))))
+          " Jurisdictions appearing on this run's tickets: "
+          (str/join ", " (map code in-use)) ".")
+     (table ["Jurisdiction" "Legal basis" "Consumer basis" "Required evidence" "On this run's tickets"]
+            (for [j (sort (into seeded in-use))]
+              (let [sb (facts/spec-basis j)]
+                (tr (code j)
+                    (if sb (esc (:legal-basis sb)) (pill "bad" "NO BASIS ON FILE"))
+                    (if sb (esc (:consumer-basis sb)) "—")
+                    (if sb (str (count (:required-evidence sb)) " records") "—")
+                    (if (contains? in-use j) (pill "ok" "yes") (pill "muted" "no")))))))))
 
-(defn- action-gate-section []
-  (section
-   "Action gate (Carpet Care Governor &times; rollout phase)"
-   (str "Derived from <code>carpetcare.phase/phases</code> and "
-        "<code>carpetcare.governor/high-stakes</code> at render time, so this table cannot "
-        "drift from the code. The two <code>:actuation/*</code> ops are members of "
-        "<code>write-ops</code> but of no phase's <code>:auto</code> set &mdash; a permanent "
-        "structural fact, not a rollout milestone still to come. A carpet left for cleaning "
-        "is a bailment: the customer keeps ownership while the operator holds possession, "
-        "and a rug destroyed by the wrong process cannot be un-destroyed.")
-   (str
-    (table ["Op" "May write in phase" "May auto-commit in phase" "High-stakes"]
-           (rows (let [ps (sort (keys phase/phases))]
-                   (for [o (sort-by str governor/allowed-ops)]
-                     (let [writes (filter #(contains? (:writes (get phase/phases %)) o) ps)
-                           autos (filter #(contains? (:auto (get phase/phases %)) o) ps)]
-                       (row (code o)
-                            (if (seq writes)
-                              (esc (str/join ", " writes))
-                              (span "muted" "never"))
-                            (if (seq autos)
-                              (span "ok" (esc (str/join ", " autos)))
-                              (span "warn" "NEVER &middot; always human-approved"))
-                            (if (contains? governor/high-stakes o)
-                              (span "critical" "yes")
-                              (span "muted" "no"))))))))
-    "    <h3>Rollout phases</h3>\n"
-    (table ["Phase" "Label" "Auto-eligible ops"]
-           (rows (for [[p {:keys [label auto]}] (sort-by key phase/phases)]
-                   (row (str "<span class=\"num\">" (esc p) "</span>")
-                        (esc label)
-                        (if (seq auto)
-                          (str/join " " (map code (sort-by str auto)))
-                          (span "muted" "none"))))))
-    "    <p class=\"muted\">Every op any phase may auto-commit, unioned across all phases: "
-    (let [ae (phase/auto-eligible-ops)]
-      (if (seq ae) (str/join " " (map code (sort-by str ae))) (span "muted" "none")))
-    ". Ops absent from this line never auto-commit at any phase.</p>\n")))
-
-(defn- hard-holds-section [ledger]
-  (let [holds (hard-holds ledger)]
+(defn- ledger-section [db]
+  (let [ledger (store/ledger db)]
     (section
-     (str "HARD holds this run (" (count holds) ")")
-     (str "Un-overridable. Each row is one violation from a real "
-          "<code>carpetcare.governor/check</code> verdict, with the governor's own "
-          "<code>:detail</code> text. None of these reached a human &mdash; a HARD hold is "
-          "not an escalation.")
-     (table ["Op" "Ticket" "Rule" "Governor detail"]
-            (rows (for [{:keys [op subject violations]} holds
-                        {:keys [rule detail]} violations]
-                    (row (code op) (code subject)
-                         (span "critical" (esc (name rule)))
-                         (esc detail))))))))
+     (str "Audit ledger — append-only (" (count ledger) " facts)")
+     (str "The complete decision-fact log this scenario produced. "
+          "\"Which rug was screened, which process was applied, which rug was handed "
+          "back, on what jurisdictional basis\" is always a query over an immutable log.")
+     (table ["#" "Fact" "Op" "Ticket" "Basis / rules"]
+            (map-indexed
+             (fn [i {:keys [t op subject basis]}]
+               (tr (str (inc i))
+                   (if (= :governor-hold t) (pill "bad" (nm t)) (pill "ok" (nm t)))
+                   (code op) (code subject)
+                   (if (seq basis)
+                     (str/join ", " (map #(esc (nm %)) basis))
+                     "—")))
+             ledger)))))
 
-(defn- approval-section [trail]
-  (let [gaps (approver-gaps trail)
-        approved (filter #(= :approved (:route %)) trail)]
-    (section
-     "Human approval trail &mdash; and where the approver survives"
-     (str "One row per committed fact. <em>Route</em> separates an auto-commit (nobody was "
-          "asked, so nobody is missing) from an approved commit (a human was named). The "
-          "last two columns are probed at render time by scanning the artefact the store "
-          "actually holds for any key naming an approver, so a fix in the store is "
-          "reported here automatically.")
-     (str
-      (table ["Op" "Ticket" "Route" "Approver (run audit)"
-              "Approver retained in SSoT record" "Approver retained in ledger fact"]
-             (rows (for [{:keys [op subject route approver-in-run approver-in-ssot
-                                 approver-in-ledger record-shape]} trail]
-                     (row (code op) (code subject)
-                          (case route
-                            :approved (span "warn" "human approval required &rarr; granted")
-                            :requested-not-granted (span "warn" "approval requested")
-                            (span "muted" "auto-commit &middot; no approval required"))
-                          (if approver-in-run
-                            (span "ok" (esc approver-in-run))
-                            (span "muted" "&mdash; nobody was asked"))
-                          (cond
-                            approver-in-ssot (span "ok" (esc approver-in-ssot))
-                            (= :approved route)
-                            (str (span "critical" "NOT RETAINED")
-                                 " <span class=\"muted\">record holds only "
-                                 (esc (or record-shape "no record")) "</span>")
-                            :else (span "muted" "&mdash; no approver to retain"))
-                          (cond
-                            approver-in-ledger (span "ok" (esc approver-in-ledger))
-                            (= :approved route) (span "critical" "NOT RETAINED")
-                            :else (span "muted" "&mdash;")))))
-             )
-      (if (seq gaps)
-        (str "    <p class=\"critical\">Measured this run: "
-             (count gaps) " of " (count approved)
-             " approved commits keep no approver anywhere in the SSoT &mdash; "
-             (str/join ", " (map #(code (:op %)) gaps))
-             ". A human was required, named and recorded in the run's audit channel, and "
-             "that name is then dropped on the way to storage: "
-             "<code>store/commit-record!</code>'s <code>:ticket/mark-cleaned</code> and "
-             "<code>:ticket/mark-returned</code> branches read neither <code>:value</code> "
-             "nor <code>:payload</code> &mdash; they rebuild the record from "
-             "<code>carpetcare.registry</code> &mdash; and <code>operation/commit-fact</code> "
-             "carries no approver field, while the <code>:approval-granted</code> fact never "
-             "reaches <code>store/append-ledger!</code> at all. These are exactly the two "
-             "acts the whole repo exists to gate. The care-plan and fibre-screening branches "
-             "store <code>:payload</code> and do keep the name, which is why this row set "
-             "shows both outcomes.</p>\n")
-        (str "    <p class=\"ok\">Measured this run: every approved commit retains its "
-             "approver in the SSoT. </p>\n"))))))
+;; ----------------------------- css -----------------------------
 
-(defn- ledger-section [ledger]
-  (section
-   (str "Audit ledger, append-only (" (count ledger) " facts)")
-   (str "Every decision fact this scenario wrote through "
-        "<code>store/append-ledger!</code>, in order. Which rug was screened, which process "
-        "was applied, which rug was handed back, on what jurisdictional basis &mdash; always "
-        "a query over an immutable log, which is the evidence both sides need when a rug "
-        "comes back yellowed or bled.")
-   (table ["#" "Fact" "Op" "Ticket" "Basis"]
-          (rows (map-indexed
-                 (fn [i {:keys [t op subject basis disposition]}]
-                   (row (str "<span class=\"num\">" (inc i) "</span>")
-                        (case t
-                          :committed (span "ok" (esc (name t)))
-                          :governor-hold (span "critical" (esc (name t)))
-                          :approval-rejected (span "warn" (esc (name t)))
-                          (span "muted" (esc (name t))))
-                        (code op) (code subject)
-                        (if (seq basis)
-                          (esc (str/join " · " (map #(if (keyword? %) (name %) (str %)) basis)))
-                          (span "muted" (esc (or (some-> disposition clojure.core/name) ""))))))
-                 ledger)))))
+(def ^:private dds-css
+  "Only the jp-go-dds (デジタル庁デザインシステム) primitives this page
+  actually references, transcribed from the local checkout
+  `orgs/kotoba-lang/jp-go-digital-design-system/resources/jp_go_dds/dds.css`
+  (MIT, Copyright (c) 2025 デジタル庁).
+
+  Inlined rather than pulled in as a git dependency on purpose: a git dep
+  would make this build network-dependent, and the library's own
+  `tokens/bridge-css` bridges a different token vocabulary than this page
+  uses, which silently unstyles it.
+
+  Note the semantic aliases are NOT a strong/weak pair --
+  `--color-semantic-error-1` is red-800 and `-2` is red-900, both dark.
+  Tint backgrounds therefore use the primitive `-50` steps."
+  "  :root {
+    --color-primitive-blue-50:#e8f1fe; --color-primitive-blue-100:#d9e6ff;
+    --color-primitive-blue-200:#c5d7fb; --color-primitive-blue-700:#264af4;
+    --color-primitive-blue-900:#0017c1;
+    --color-primitive-green-50:#e6f5ec; --color-primitive-green-200:#9bd4b5;
+    --color-primitive-green-600:#259d63; --color-primitive-green-800:#197a4b;
+    --color-primitive-red-50:#fdeeee; --color-primitive-red-200:#ffbbbb;
+    --color-primitive-red-800:#ec0000; --color-primitive-red-900:#ce0000;
+    --color-primitive-yellow-50:#fbf5e0; --color-primitive-yellow-200:#ffe380;
+    --color-primitive-yellow-900:#927200;
+    --color-neutral-white:#ffffff;
+    --color-neutral-solid-gray-50:#f2f2f2; --color-neutral-solid-gray-100:#e6e6e6;
+    --color-neutral-solid-gray-200:#cccccc; --color-neutral-solid-gray-536:#767676;
+    --color-neutral-solid-gray-700:#4d4d4d; --color-neutral-solid-gray-800:#333333;
+    --color-neutral-solid-gray-900:#1a1a1a;
+    --font-family-sans:\"Noto Sans JP\",-apple-system,BlinkMacSystemFont,sans-serif;
+    --font-family-mono:\"Noto Sans Mono\",monospace;
+    /* semantic aliases, as upstream defines them */
+    --color-semantic-error-1:var(--color-primitive-red-800);
+    --color-semantic-error-2:var(--color-primitive-red-900);
+    --color-semantic-success-1:var(--color-primitive-green-600);
+    --color-semantic-success-2:var(--color-primitive-green-800);
+  }
+")
+
+(def ^:private page-css
+  "  *{box-sizing:border-box}
+  body{margin:0;background:var(--color-neutral-solid-gray-50);
+       color:var(--color-neutral-solid-gray-900);
+       font-family:var(--font-family-sans);line-height:1.7;
+       -webkit-font-smoothing:antialiased}
+  header.bar{background:var(--color-primitive-blue-900);color:var(--color-neutral-white);
+             padding:28px 32px}
+  header.bar h1{margin:0 0 10px;font-size:1.45rem;line-height:1.4;font-weight:700}
+  header.bar .badge{display:inline-block;background:rgba(255,255,255,.14);
+                    border:1px solid rgba(255,255,255,.32);border-radius:4px;
+                    padding:5px 12px;font-size:.8rem}
+  header.bar .sub{margin:12px 0 0;font-size:.85rem;color:var(--color-primitive-blue-100)}
+  main{max-width:1180px;margin:0 auto;padding:28px 20px 64px}
+  section.card{background:var(--color-neutral-white);
+               border:1px solid var(--color-neutral-solid-gray-200);
+               border-radius:8px;padding:22px 24px;margin-bottom:22px}
+  section.card h2{margin:0 0 8px;font-size:1.1rem;font-weight:700;
+                  color:var(--color-primitive-blue-900)}
+  p.lede{margin:0 0 16px;font-size:.86rem;color:var(--color-neutral-solid-gray-700)}
+  table{width:100%;border-collapse:collapse;font-size:.82rem}
+  th,td{text-align:left;padding:8px 10px;
+        border-bottom:1px solid var(--color-neutral-solid-gray-100);
+        vertical-align:top}
+  th{background:var(--color-neutral-solid-gray-50);font-weight:700;
+     color:var(--color-neutral-solid-gray-800);white-space:nowrap}
+  tbody tr:last-child td{border-bottom:none}
+  code{font-family:var(--font-family-mono);font-size:.79rem;
+       background:var(--color-neutral-solid-gray-50);
+       border:1px solid var(--color-neutral-solid-gray-100);
+       border-radius:3px;padding:1px 5px;white-space:nowrap}
+  .pill{display:inline-block;border-radius:999px;padding:2px 10px;
+        font-size:.74rem;font-weight:700;white-space:nowrap}
+  .pill.ok{background:var(--color-primitive-green-50);
+           color:var(--color-semantic-success-2);
+           border:1px solid var(--color-primitive-green-200)}
+  .pill.bad{background:var(--color-primitive-red-50);
+            color:var(--color-semantic-error-2);
+            border:1px solid var(--color-primitive-red-200)}
+  .pill.warn{background:var(--color-primitive-yellow-50);
+             color:var(--color-primitive-yellow-900);
+             border:1px solid var(--color-primitive-yellow-200)}
+  .pill.muted{background:var(--color-neutral-solid-gray-50);
+              color:var(--color-neutral-solid-gray-536);
+              border:1px solid var(--color-neutral-solid-gray-200)}
+  .bad-text{color:var(--color-semantic-error-1)}
+  .ok-text{color:var(--color-semantic-success-2)}
+  .muted-text{color:var(--color-neutral-solid-gray-536);font-size:.78rem}
+  footer{max-width:1180px;margin:0 auto;padding:0 20px 48px;
+         font-size:.78rem;color:var(--color-neutral-solid-gray-536)}
+  footer code{background:var(--color-neutral-white)}
+")
 
 ;; ----------------------------- document -----------------------------
 
 (defn render
-  "Renders the operator console from a completed `run-demo!` result."
-  [{:keys [db] :as run}]
-  (let [ledger (vec (store/ledger db))
-        holds (hard-holds ledger)
-        trail (approval-trail run)
-        committed (filter #(= :committed (:t %)) ledger)
-        rules (sort (distinct (map name (mapcat :basis holds))))]
-    (str
-     "<!doctype html>\n"
-     "<html lang=\"en\"><head><meta charset=\"utf-8\">\n"
-     "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
-     "<title>cloud-itonami-isic-9601-carpet &middot; carpet &amp; rug cleaning operator console</title>\n"
-     "<style>\n" (jp-go-dds.skin/dds+skin) "\n</style></head><body>\n"
-     "<header class=\"bar\">\n"
-     "  <h1>Carpet &amp; rug cleaning &mdash; Operator Console</h1>\n"
-     "  <span class=\"badge\">read-only sample · governor-gated · cleaning &amp; return always human-approved</span>\n"
-     "</header>\n"
-     "<main>\n"
-     "  <section class=\"banner\">\n"
-     "    <p>Generated at build time by <code>carpetcare.render-html</code> "
-     "(<code>clojure -M:dev:render-html</code>) by running the real actor stack &mdash; "
-     "<code>carpetcare.operation</code> (a langgraph StateGraph) &rarr; "
-     "<code>carpetcare.governor</code> &rarr; <code>carpetcare.store</code> &mdash; over this "
-     "repo's own seeded tickets. No figure below is typed by hand.</p>\n"
-     "    <p class=\"muted\">This run: <strong>" (count committed) "</strong> committed facts · "
-     "<strong>" (count holds) "</strong> HARD governor holds covering "
-     "<strong>" (count rules) "</strong> distinct rules ("
-     (str/join ", " (map code rules)) ") · "
-     "<strong>" (count (filter #(= :approval-rejected (:t %)) ledger)) "</strong> approver "
-     "rejection · <strong>" (count (store/cleaning-history db)) "</strong> cleaning "
-     "application and <strong>" (count (store/return-history db)) "</strong> carpet return "
-     "registered.</p>\n"
-     "    <p class=\"muted\">ISIC attribution is <em>declared, not claimed</em>: this "
-     "workspace's ISIC mirror enumerates carpet cleaning in no class, so this actor states "
-     "an operating model (off-premises intake &mdash; the rug is collected, cleaned and "
-     "returned) and derives 9601 from that. <code>:actuation/declare-isic-class</code> is "
-     "deliberately absent from the vocabulary, so this actor cannot settle the question on "
-     "a statistical authority's behalf.</p>\n"
-     "  </section>\n"
-     (tickets-section db ledger)
-     (fibre-table-section)
-     (fibre-recompute-section db)
-     (moisture-section db)
-     (spec-basis-section db)
-     (action-gate-section)
-     (hard-holds-section ledger)
-     (approval-section trail)
-     (ledger-section ledger)
-     "</main>\n"
-     "<footer>\n"
-     "  <p>cloud-itonami-isic-9601-carpet · AGPL-3.0-or-later · regenerate with "
-     "<code>clojure -M:dev:render-html</code>. Deterministic: no timestamps, no randomness, "
-     "every map iteration explicitly sorted &mdash; two runs against the same seed are "
-     "byte-identical.</p>\n"
-     "</footer>\n"
-     "</body></html>\n")))
+  "Renders the whole document from a store `db` and the run's `audit`
+  channel, both produced by `run-demo!`."
+  [{:keys [db audit]}]
+  (str
+   "<!doctype html>\n"
+   "<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
+   "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+   "<title>cloud-itonami-isic-9601-carpet · carpet &amp; rug cleaning operator console</title>\n"
+   "<style>\n" dds-css page-css "</style>\n</head>\n<body>\n"
+   "<header class=\"bar\">\n"
+   "  <h1>Carpet &amp; rug cleaning — Operator Console</h1>\n"
+   "  <span class=\"badge\">read-only sample · governor-gated · cleaning &amp; return ALWAYS human-approved</span>\n"
+   "  <p class=\"sub\">Generated at build time by <code>carpetcare.render-html</code> "
+   "(<code>clojure -M:dev:render-html</code>) by executing the real "
+   "<code>carpetcare.operation</code> StateGraph over <code>carpetcare.store/demo-data</code>. "
+   "No hand-written rows, no timestamps — reruns are byte-identical.</p>\n"
+   "</header>\n<main>\n"
+   (tickets-section db)
+   (rules-section db)
+   (holds-section db)
+   (attribution-section db audit)
+   (vocabulary-section)
+   (phases-section)
+   (registry-section db)
+   (jurisdictions-section db)
+   (ledger-section db)
+   "</main>\n"
+   "<footer>\n"
+   "  <p>This actor declares its own operating model — an off-premises intake, where the "
+   "rug is collected, cleaned and returned — and claims nothing beyond it. This workspace's "
+   "ISIC mirror does not enumerate carpet cleaning in any class; ISIC 9601's "
+   "&ldquo;washing, cleaning, dyeing and pressing of textile products&rdquo; is the reading "
+   "it operates under, not an authoritative self-classification. See "
+   "<code>docs/adr/0001-architecture.md</code>.</p>\n"
+   "</footer>\n</body>\n</html>\n"))
+
+;; ----------------------------- entry point -----------------------------
+
+(defn- verify!
+  "Build-time invariant. A run that holds nothing, or that fails to prove
+  a rule the scenario declared it would prove, must NOT be able to
+  publish a page. Throws rather than warning: a warning on stderr is
+  something a build log swallows."
+  [db]
+  (let [hs       (holds db)
+        fired    (fired-rules db)
+        expected (into (sorted-set) (keep :expect) scenario)
+        missing  (into (sorted-set) (remove fired) expected)]
+    (when (empty? hs)
+      (throw (ex-info "render aborted: the run produced ZERO :governor-hold records — a console that cannot show the governor refusing anything is not evidence that it works"
+                      {:holds 0 :expected-rules expected})))
+    (when (seq missing)
+      (throw (ex-info (str "render aborted: rules the scenario declared it would prove did not fire: "
+                           (str/join ", " (map name missing)))
+                      {:missing missing :fired fired :holds (count hs)})))
+    (when (< (count fired) 2)
+      (throw (ex-info "render aborted: fewer than two distinct hold reasons — rule variety floor not met"
+                      {:fired fired})))
+    {:holds (count hs) :rules fired}))
 
 (defn -main [& args]
   (let [out (or (first args) "docs/samples/operator-console.html")
-        run (run-demo!)
-        db (:db run)
-        ledger (vec (store/ledger db))
-        holds (hard-holds ledger)
-        html (render run)]
-    ;; The HARD-hold requirement is a build-time invariant, not a
-    ;; convention: a scenario that stopped reaching the governor's
-    ;; un-overridable branch would render a page that looks fine and
-    ;; proves nothing, so refuse to write it.
-    (when (zero? (count holds))
-      (throw (ex-info "refusing to write an operator console with 0 HARD governor holds"
-                      {:ledger-facts (count ledger)
-                       :committed (count (filter #(= :committed (:t %)) ledger))})))
+        {:keys [db audit] :as result} (run-demo!)
+        {:keys [holds rules]} (verify! db)
+        html (render result)]
     (spit out html)
     (println "wrote" out
-             (str "(" (count ledger) " ledger facts, "
-                  (count holds) " HARD governor holds, "
-                  (count (approver-gaps (approval-trail run))) " approved commits with a "
-                  "dropped approver, "
-                  (count (store/cleaning-history db)) " cleaning applications, "
-                  (count (store/return-history db)) " carpet returns)"))))
+             (str "(" (count html) " bytes, "
+                  (count (store/ledger db)) " ledger facts, "
+                  holds " HARD holds over " (count rules) " distinct rules, "
+                  (count (approval-facts audit)) " human approvals, "
+                  (count (store/cleaning-history db)) " cleanings, "
+                  (count (store/return-history db)) " returns)"))))
