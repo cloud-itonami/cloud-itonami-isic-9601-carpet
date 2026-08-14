@@ -499,9 +499,7 @@
   `--color-semantic-error-1` is red-800 and `-2` is red-900, both dark.
   Tint backgrounds therefore use the primitive `-50` steps."
   "  :root {
-    --color-primitive-blue-50:#e8f1fe; --color-primitive-blue-100:#d9e6ff;
-    --color-primitive-blue-200:#c5d7fb; --color-primitive-blue-700:#264af4;
-    --color-primitive-blue-900:#0017c1;
+    --color-primitive-blue-100:#d9e6ff; --color-primitive-blue-900:#0017c1;
     --color-primitive-green-50:#e6f5ec; --color-primitive-green-200:#9bd4b5;
     --color-primitive-green-600:#259d63; --color-primitive-green-800:#197a4b;
     --color-primitive-red-50:#fdeeee; --color-primitive-red-200:#ffbbbb;
@@ -518,7 +516,6 @@
     /* semantic aliases, as upstream defines them */
     --color-semantic-error-1:var(--color-primitive-red-800);
     --color-semantic-error-2:var(--color-primitive-red-900);
-    --color-semantic-success-1:var(--color-primitive-green-600);
     --color-semantic-success-2:var(--color-primitive-green-800);
   }
 ")
@@ -646,7 +643,8 @@
         html (render result)]
     (spit out html)
     (println "wrote" out
-             (str "(" (count html) " bytes, "
+             ;; chars, not bytes -- the page contains multi-byte Japanese
+             (str "(" (count html) " chars, "
                   (count (store/ledger db)) " ledger facts, "
                   holds " HARD holds over " (count rules) " distinct rules, "
                   (count (approval-facts audit)) " human approvals, "
