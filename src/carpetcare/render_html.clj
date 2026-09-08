@@ -33,7 +33,7 @@
   Usage: `clojure -M:dev:render-html [out-file]`
   (default `docs/samples/operator-console.html`)."
   (:require [clojure.set :as set]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [carpetcare.advisor :as advisor]
             [carpetcare.facts :as facts]
             [carpetcare.governor :as governor]

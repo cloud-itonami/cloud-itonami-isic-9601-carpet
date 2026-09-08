@@ -54,7 +54,7 @@
   on the censored party's own `:stake` report: if the advisor omits or
   mislabels it, an op-name set still holds and a `:stake` set does not.
   (superproject ADR-2800004000 records that this fleet carries both.)"
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [carpetcare.facts :as facts]
             [carpetcare.registry :as registry]
             [carpetcare.store :as store]))
@@ -169,8 +169,8 @@
 (defn- scope-exclusion-violations
   [proposal]
   (let [text (str (:summary proposal) " " (:rationale proposal))
-        lower (str/lower-case text)]
-    (when-let [hit (first (filter #(str/includes? lower (str/lower-case (str %)))
+        lower (str/lower text)]
+    (when-let [hit (first (filter #(str/includes? lower (str/lower (str %)))
                                   scope-excluded-terms))]
       [{:rule :scope-excluded
         :detail (str "恒久的にスコープ外の判断に触れる文言を含む: " hit)}])))

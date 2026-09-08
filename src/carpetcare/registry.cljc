@@ -1,7 +1,7 @@
 (ns carpetcare.registry
   "Pure record drafting + the ground-truth recomputation the Carpet Care
   Governor relies on. Nothing here reads a proposal."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 ;; ----------------------------- fibre / process compatibility -----------------------------
 
@@ -60,7 +60,7 @@
 ;; ----------------------------- record drafting -----------------------------
 
 (defn- seq->number [prefix jurisdiction seq-n]
-  (str prefix "-" (str/upper-case (or jurisdiction "XXX")) "-"
+  (str prefix "-" (str/upper (or jurisdiction "XXX")) "-"
        (str/join (repeat (max 0 (- 4 (count (str (inc seq-n))))) "0"))
        (inc seq-n)))
 
