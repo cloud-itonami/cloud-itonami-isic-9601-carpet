@@ -11,7 +11,7 @@
   consent to the process and the process actually applied. JPN's
   クリーニング業法 is the closest instrument and it is why the required
   evidence list looks the way it does."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (def spec-basis-table
   {"JPN" {:name "Japan"
@@ -39,7 +39,7 @@
                               "Faserbestimmungsprotokoll (fibre-identification-record)"
                               "Reinigungsprotokoll (cleaning-process-record)"]}})
 
-(defn spec-basis [iso3] (get spec-basis-table (some-> iso3 str/upper-case)))
+(defn spec-basis [iso3] (get spec-basis-table (some-> iso3 str/upper)))
 (defn covered? [iso3] (some? (spec-basis iso3)))
 
 (defn coverage-summary []
