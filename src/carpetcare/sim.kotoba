@@ -1,5 +1,5 @@
 (ns carpetcare.sim
-  "Demo driver -- `clojure -M:dev:run`. Walks a clean ticket through
+  "Demo driver -- `kbb -M:dev:run`. Walks a clean ticket through
   intake -> care-plan verification -> fibre/colourfastness screening ->
   cleaning application (escalate/approve/commit) -> carpet return
   (escalate/approve/commit), then shows every HARD-hold scenario:

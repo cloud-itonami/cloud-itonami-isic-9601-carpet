@@ -30,7 +30,7 @@
   in fact proven. A silent run that holds nothing must not be able to
   publish a page claiming the governor works. (Precedent: isic-2513.)
 
-  Usage: `clojure -M:dev:render-html [out-file]`
+  Usage: `kbb -M:dev:render-html [out-file]`
   (default `docs/samples/operator-console.html`)."
   (:require [clojure.set :as set]
             [kotoba.lang.text :as str]
@@ -614,7 +614,7 @@
    "  <h1>Carpet &amp; rug cleaning — Operator Console</h1>\n"
    "  <span class=\"badge\">read-only sample · governor-gated · cleaning &amp; return ALWAYS human-approved</span>\n"
    "  <p class=\"sub\">Generated at build time by <code>carpetcare.render-html</code> "
-   "(<code>clojure -M:dev:render-html</code>) by executing the real "
+   "(<code>kbb -M:dev:render-html</code>) by executing the real "
    "<code>carpetcare.operation</code> StateGraph over <code>carpetcare.store/demo-data</code>. "
    "No hand-written rows, no timestamps — reruns are byte-identical.</p>\n"
    "</header>\n<main>\n"

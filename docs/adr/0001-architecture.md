@@ -81,7 +81,7 @@ subject-key debt (ADR-2800004000: 5229 `:target-id`, 4759 `:store-id`,
 - Carpet cleaning has an implementation, and the classification
   uncertainty is visible in the repo rather than resolved by assertion.
 - 5 commits and 6 distinct governor holds, each naming its own rule —
-  checkable with `clojure -M:dev:run`.
+  checkable with `kbb -M:dev:run`.
 
 ### What it costs, stated rather than hidden
 
