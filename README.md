@@ -71,8 +71,8 @@ dispute turns on.
 ## Run it
 
 ```bash
-clojure -M:dev:run     # 5 commits and 6 distinct governor holds
-clojure -M:dev:test    # 31 tests / 91 assertions
+kbb -M:dev:run     # 5 commits and 6 distinct governor holds
+kbb -M:dev:test    # 31 tests / 91 assertions
 ```
 
 ```
