@@ -88,7 +88,7 @@ subject-key debt (ADR-2800004000: 5229 `:target-id`, 4759 `:store-id`,
 - **The attribution may be revised.** If a future ISIC revision or a
   national statistical office places carpet cleaning explicitly, this
   repo may need to move under a different parent. The repo name pins the
-  parent, and CLAUDE.md's naming rules say names are discovery aliases
+  parent, and AGENTS.md's naming rules say names are discovery aliases
   rather than identity — so a revision would be a new registration with
   the old one superseded, not a silent rename.
 - **In-situ carpet cleaning is not covered.** The model is off-premises
